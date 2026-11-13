@@ -2,10 +2,12 @@ import type { APIRoute } from 'astro';
 import { json, readJson, str } from '@/lib/http';
 import { PlaidError, createLinkToken } from '@/lib/plaid';
 
+// { } links a new bank. { itemId } reopens an existing one (no slot). { itemId, consent: 'liabilities' } asks for card due dates.
 export const POST: APIRoute = async ({ request, locals }) => {
   const body = (await readJson(request)) ?? {};
+  const consent = body.consent === 'liabilities' ? 'liabilities' : undefined;
   try {
-    return json({ linkToken: await createLinkToken(locals.user.email, str(body.itemId)) });
+    return json({ linkToken: await createLinkToken(locals.user.email, str(body.itemId), consent) });
   } catch (e) {
     if (!(e instanceof PlaidError)) console.error('[link-token]', e instanceof Error ? e.stack ?? e.message : e);
     if (e instanceof PlaidError) return json({ error: e.message, code: e.code }, e.status >= 400 && e.status < 600 ? e.status : 500);

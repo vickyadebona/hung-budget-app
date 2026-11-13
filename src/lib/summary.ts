@@ -1,6 +1,11 @@
 import { db } from './db';
 import { itemCap, plaidConfigured, plaidEnv, slotsUsed } from './plaid';
 import { findRecurring, merchantKey, monthlyCost } from './recurring';
+import { appleSubscriptions } from './apple-store';
+import { appleFrequency, cardState, daysUntil, needsAttention } from './cards';
+
+// Bank-side lumps that the Apple receipts break down item by item.
+const APPLE_BILLING = /apple\.com|itunes|apple services/i;
 
 const ASSET = new Set(['depository', 'investment']);
 const DEBT = new Set(['credit', 'loan']);
@@ -10,7 +15,7 @@ export async function getSummary() {
   const sql = await db();
   const envName = plaidEnv();
   const items = (await sql.query(
-    'SELECT id, owner_email, institution_name, status, last_synced_at FROM items WHERE plaid_env = $1 ORDER BY created_at', [envName],
+    'SELECT id, owner_email, institution_name, status, last_synced_at, liabilities FROM items WHERE plaid_env = $1 ORDER BY created_at', [envName],
   )).rows;
   const ids = items.map((i) => i.id);
   const none = ids.length === 0;
@@ -62,12 +67,68 @@ export async function getSummary() {
       priceChanged: c.priceChanged,
     }));
 
-  const all = [...recurring, ...extra].sort((a, b) => b.monthly - a.monthly);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles' }).format(new Date());
+
+  // Apple subscriptions from Gmail receipts. When there are any, the bank's single "Apple" charge is replaced by the real list.
+  const apple = await appleSubscriptions(today);
+  const appleRows = apple.map((a) => ({
+    id: a.id,
+    label: a.name,
+    frequency: appleFrequency(a.months),
+    amount: a.price,
+    monthly: a.monthly,
+    lastDate: a.lastCharged as string | null,
+    nextDate: a.renews as string | null,
+    category: null as string | null,
+    source: 'apple' as const,
+    priceChanged: a.previousPrice !== null && Math.abs(a.previousPrice - a.price) > 0.009,
+    owner: a.owner,
+    trial: a.trial,
+  }));
+  const bankRows = [...recurring, ...extra].filter((r) => apple.length === 0 || !APPLE_BILLING.test(r.label));
+  const all = [...bankRows, ...appleRows].sort((a, b) => b.monthly - a.monthly);
   const horizon = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
-  const upcoming = all
-    .filter((r) => r.nextDate && r.nextDate >= today && r.nextDate <= horizon)
+
+  // Credit cards with their statement details (when the bank shares them).
+  const liab = none ? [] : (await sql.query('SELECT * FROM card_liabilities WHERE item_id = ANY($1)', [ids])).rows;
+  const liabBy = new Map(liab.map((l) => [l.account_id as string, l]));
+  const num = (v: unknown) => (v == null ? null : Number(v));
+  const cards = accounts
+    .filter((a) => a.type === 'credit')
+    .map((a) => {
+      const l = liabBy.get(a.id);
+      const details = l
+        ? {
+            next_due: l.next_due as string | null, minimum: num(l.minimum), statement_balance: num(l.statement_balance),
+            statement_date: l.statement_date as string | null, last_payment: num(l.last_payment), last_payment_date: l.last_payment_date as string | null,
+            is_overdue: l.is_overdue as boolean | null,
+          }
+        : null;
+      const state = cardState(details, today);
+      return { ...a, details, state, daysLeft: details?.next_due ? daysUntil(details.next_due, today) : null };
+    });
+
+  const cardBills = cards
+    .filter((c) => c.details?.next_due && (c.state === 'due' || c.state === 'due-soon' || c.state === 'overdue'))
+    .map((c) => ({
+      id: 'card:' + c.id,
+      label: `${c.name}${c.mask ? ' ··' + c.mask : ''} minimum`,
+      frequency: 'monthly',
+      amount: c.details!.minimum ?? 0,
+      monthly: 0,
+      lastDate: c.details!.last_payment_date,
+      nextDate: c.details!.next_due,
+      category: null as string | null,
+      source: 'card' as const,
+      priceChanged: false,
+    }));
+
+  const upcoming = [...all, ...cardBills]
+    .filter((r) => r.nextDate && (r.source === 'card' ? r.nextDate <= horizon : r.nextDate >= today && r.nextDate <= horizon))
     .sort((a, b) => a.nextDate!.localeCompare(b.nextDate!));
+  const cardNotices = cards
+    .filter((c) => needsAttention(c.state))
+    .map((c) => ({ accountId: c.id, name: `${c.name}${c.mask ? ' ··' + c.mask : ''}`, state: c.state, minimum: c.details?.minimum ?? null, due: c.details?.next_due ?? null, daysLeft: c.daysLeft }));
 
   const sum = (kinds: Set<string>) => accounts.filter((a) => kinds.has(a.type)).reduce((n, a) => n + (a.current ?? 0), 0);
   const assets = sum(ASSET);
@@ -77,8 +138,14 @@ export async function getSummary() {
     env: envName,
     configured: plaidConfigured(),
     slots: { used: await slotsUsed(sql), cap: itemCap() },
-    items: items.map((i) => ({ id: i.id, name: i.institution_name, owner: i.owner_email, status: i.status, lastSynced: i.last_synced_at })),
+    items: items.map((i) => ({ id: i.id, name: i.institution_name, owner: i.owner_email, status: i.status, lastSynced: i.last_synced_at, liabilities: (i.liabilities ?? null) as string | null })),
     accounts,
+    bank: accounts.filter((a) => a.type === 'depository'),
+    investments: accounts.filter((a) => a.type === 'investment'),
+    loans: accounts.filter((a) => a.type === 'loan'),
+    cards,
+    cardNotices,
+    appleCount: apple.length,
     totals: { assets, debts, net: assets - debts, monthlyRecurring: all.reduce((n, r) => n + r.monthly, 0) },
     recurring: all,
     upcoming,

@@ -12,22 +12,23 @@ declare global {
   }
 }
 
-const day = (d: string) => new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+const day = (d: string) => new Date(d + 'T12:00:00').toLocaleDateString('en-US', d.slice(0, 4) === String(new Date().getFullYear()) ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' });
 const FREQ: Record<string, string> = {
   WEEKLY: 'weekly', BIWEEKLY: 'every 2 weeks', SEMI_MONTHLY: 'twice a month', MONTHLY: 'monthly', ANNUALLY: 'yearly',
-  weekly: 'weekly', biweekly: 'every 2 weeks', monthly: 'monthly', quarterly: 'every 3 months', yearly: 'yearly',
+  weekly: 'weekly', biweekly: 'every 2 weeks', monthly: 'monthly', quarterly: 'every 3 months', yearly: 'yearly', 'every-6-months': 'every 6 months',
 };
 const LINK_KEY = 'bud_link_token';
 
 // Kept in localStorage (not sessionStorage) because a bank's own app can send you back in a new tab.
 // Link tokens expire after 4 hours, so an old one is ignored.
-function rememberToken(token: string) {
-  try { localStorage.setItem(LINK_KEY, JSON.stringify({ token, at: Date.now() })); } catch { /* private mode */ }
+type LinkMode = { itemId?: string; consent?: 'liabilities' };
+function rememberToken(token: string, mode: LinkMode = {}) {
+  try { localStorage.setItem(LINK_KEY, JSON.stringify({ token, mode, at: Date.now() })); } catch { /* private mode */ }
 }
-function recallToken(): string | null {
+function recallToken(): { token: string; mode: LinkMode } | null {
   try {
     const v = JSON.parse(localStorage.getItem(LINK_KEY) ?? 'null');
-    return v && typeof v.token === 'string' && Date.now() - v.at < 3.5 * 3600_000 ? v.token : null;
+    return v && typeof v.token === 'string' && Date.now() - v.at < 3.5 * 3600_000 ? { token: v.token, mode: v.mode ?? {} } : null;
   } catch { return null; }
 }
 function forgetToken() {
@@ -57,10 +58,44 @@ function Section({ title, aside, children }: { title: string; aside?: React.Reac
   );
 }
 
+type Account = Summary['accounts'][number];
+type Card = Summary['cards'][number];
+
+function AccountList({ accounts, bankName }: { accounts: Account[]; bankName: (itemId: string) => string }) {
+  return (
+    <ul className="divide-y">
+      {accounts.map((a) => (
+        <li key={a.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+          <span className="min-w-0 flex-1">
+            <span className="block truncate">{a.name}{a.mask && <span className="text-muted-foreground"> ··{a.mask}</span>}</span>
+            <span className="block truncate text-xs text-muted-foreground">{bankName(a.item_id)}</span>
+          </span>
+          <span className="tabular-nums">{a.current == null ? '—' : money(a.current)}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+const longDay = (d: string) => new Date(d + 'T12:00:00').toLocaleDateString('en-US', d.slice(0, 4) === String(new Date().getFullYear()) ? { weekday: 'short', month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' });
+const inDays = (n: number | null) => (n === null ? '' : n === 0 ? ' (today)' : n === 1 ? ' (tomorrow)' : n > 1 ? ` (in ${n} days)` : '');
+
+function cardLine(c: Card): string {
+  const d = c.details;
+  switch (c.state) {
+    case 'overdue': return d?.next_due ? `Payment overdue: ${money(d.minimum ?? 0)} minimum was due ${longDay(d.next_due)}` : 'Payment overdue';
+    case 'due-soon':
+    case 'due': return `${money(d!.minimum ?? 0)} minimum due ${longDay(d!.next_due!)}${inDays(c.daysLeft)}${d!.statement_balance != null ? ` · statement ${money(d!.statement_balance)}` : ''}`;
+    case 'paid': return `Paid ${money(d!.last_payment ?? 0)} on ${longDay(d!.last_payment_date!)}${d!.next_due ? ` · next due ${longDay(d!.next_due)}` : ''}`;
+    case 'nothing-due': return 'No payment due';
+    default: return 'Due date not shared yet';
+  }
+}
+
 const Empty = ({ children }: { children: React.ReactNode }) => <p className="text-sm text-muted-foreground">{children}</p>;
 
-export default function Dashboard({ initial, userName, notices = [], onOpenBudget }: {
-  initial: Summary; userName: string; notices?: Notice[]; onOpenBudget?: () => void;
+export default function Dashboard({ initial, userName, userEmail, notices = [], onOpenBudget }: {
+  initial: Summary; userName: string; userEmail: string; notices?: Notice[]; onOpenBudget?: () => void;
 }) {
   const [data, setData] = useState(initial);
   const [busy, setBusy] = useState<string | null>(null);
@@ -82,7 +117,7 @@ export default function Dashboard({ initial, userName, notices = [], onOpenBudge
     }
   }, []);
 
-  const openLink = useCallback(async (linkToken: string, receivedRedirectUri?: string) => {
+  const openLink = useCallback(async (linkToken: string, mode: LinkMode, receivedRedirectUri?: string) => {
     await loadPlaid();
     handler.current?.destroy();
     handler.current = window.Plaid!.create({
@@ -90,8 +125,10 @@ export default function Dashboard({ initial, userName, notices = [], onOpenBudge
       receivedRedirectUri,
       onSuccess: (publicToken: string, meta: { institution?: { name?: string } }) => {
         forgetToken();
-        void run('Saving your bank', async () => {
-          await api('/api/plaid/exchange', { publicToken, institutionName: meta?.institution?.name });
+        void run(mode.itemId ? 'Refreshing your bank' : 'Saving your bank', async () => {
+          // Reopening an existing login keeps the same saved login: nothing to exchange, just refresh.
+          if (mode.itemId) await api('/api/plaid/updated', { itemId: mode.itemId, consent: mode.consent });
+          else await api('/api/plaid/exchange', { publicToken, institutionName: meta?.institution?.name });
           await refresh();
         });
       },
@@ -114,21 +151,24 @@ export default function Dashboard({ initial, userName, notices = [], onOpenBudge
     const saved = recallToken();
     const href = location.href;
     history.replaceState(null, '', location.pathname);
-    if (saved) void run('Finishing bank sign-in', () => openLink(saved, href));
+    if (saved) void run('Finishing bank sign-in', () => openLink(saved.token, saved.mode, href));
     else setError('The bank sign-in could not be picked up again in this browser. Nothing was linked and no slot was used. Tap Link a bank to retry.');
   }, [openLink, run]);
 
-  const connect = (itemId?: string) =>
+  const connect = (itemId?: string, consent?: 'liabilities') =>
     run('Opening bank picker', async () => {
       setConfirming(false);
-      const { linkToken } = await api<{ linkToken: string }>('/api/plaid/link-token', itemId ? { itemId } : {});
-      rememberToken(linkToken);
-      await openLink(linkToken);
+      const mode: LinkMode = itemId ? { itemId, consent } : {};
+      const { linkToken } = await api<{ linkToken: string }>('/api/plaid/link-token', mode);
+      rememberToken(linkToken, mode);
+      await openLink(linkToken, mode);
     });
 
   const real = data.env === 'production';
   const slotsLeft = data.slots.cap - data.slots.used;
-  const byItem = (id: string) => data.accounts.filter((a) => a.item_id === id);
+  const bankName = (itemId: string) => data.items.find((i) => i.id === itemId)?.name ?? '';
+  const total = (xs: { current: number | null }[]) => xs.reduce((n, a) => n + (a.current ?? 0), 0);
+  const consentItems = data.items.filter((i) => i.liabilities === 'consent');
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-4 pb-6">
@@ -157,6 +197,18 @@ export default function Dashboard({ initial, userName, notices = [], onOpenBudge
       )}
       {error && <p role="alert" className="rounded-xl bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
       {busy && <p className="text-sm text-muted-foreground" aria-live="polite">{busy}…</p>}
+      {data.cardNotices.length > 0 && (
+        <ul className="grid gap-2" aria-label="Card payments due">
+          {data.cardNotices.map((n) => (
+            <li key={n.accountId} className={`rounded-xl px-3 py-2 text-sm ${n.state === 'overdue' ? 'bg-destructive/10 text-destructive' : 'bg-warn text-warn-foreground'}`}>
+              <span className="font-medium">{n.name}</span>
+              {n.state === 'overdue'
+                ? `: payment overdue${n.minimum != null ? `, ${money(n.minimum)} minimum` : ''}`
+                : `: ${n.minimum != null ? money(n.minimum) + ' minimum' : 'payment'} due ${n.due ? longDay(n.due) : ''}${inDays(n.daysLeft)}`}
+            </li>
+          ))}
+        </ul>
+      )}
       <Notices notices={notices} onOpen={onOpenBudget} />
 
       <div className="grid grid-cols-2 gap-3">
@@ -196,6 +248,8 @@ export default function Dashboard({ initial, userName, notices = [], onOpenBudge
                   <p className="text-xs text-muted-foreground">
                     {FREQ[r.frequency] ?? 'repeats'}
                     {r.source === 'found' && ' · spotted by our own check'}
+                    {r.source === 'apple' && ' · from Apple receipts'}
+                    {'trial' in r && r.trial && ' · free trial'}
                     {r.priceChanged && ' · price changed'}
                   </p>
                 </div>
@@ -206,33 +260,69 @@ export default function Dashboard({ initial, userName, notices = [], onOpenBudge
         )}
       </Section>
 
-      <Section title="Accounts" aside={real ? `${slotsLeft} of ${data.slots.cap} bank logins left` : undefined}>
+      <Section title="Bank balances" aside={data.bank.length ? money(total(data.bank)) : undefined}>
+        {data.bank.length === 0 ? <Empty>No checking or savings accounts linked yet.</Empty> : (
+          <AccountList accounts={data.bank} bankName={bankName} />
+        )}
+      </Section>
+
+      <Section title="Credit cards" aside={data.cards.length ? `${money(total(data.cards))} owed` : undefined}>
+        {data.cards.length === 0 ? <Empty>No credit cards linked yet.</Empty> : (
+          <ul className="divide-y">
+            {data.cards.map((c) => (
+              <li key={c.id} className="py-2.5 text-sm">
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="min-w-0 flex-1 truncate font-medium">{c.name}{c.mask && <span className="font-normal text-muted-foreground"> ··{c.mask}</span>}</span>
+                  <span className="shrink-0 tabular-nums">{c.current == null ? '—' : money(c.current)}</span>
+                </div>
+                <p className={`text-xs ${c.state === 'overdue' ? 'text-destructive' : c.state === 'due-soon' ? 'font-medium text-warn-foreground' : 'text-muted-foreground'}`}>
+                  {cardLine(c)}
+                  <span className="text-muted-foreground"> · {bankName(c.item_id)}</span>
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
+        {consentItems.map((it) => (
+          <div key={it.id} className="mt-3 flex items-center justify-between gap-3 rounded-xl bg-muted px-3 py-2 text-sm">
+            <span>{it.name} needs your OK to share card due dates.</span>
+            <Button size="sm" variant="outline" disabled={!!busy || it.owner !== userEmail} onClick={() => connect(it.id, 'liabilities')}
+              title={it.owner !== userEmail ? `Only ${it.owner} can allow this` : undefined}>Allow</Button>
+          </div>
+        ))}
+      </Section>
+
+      {data.investments.length > 0 && (
+        <Section title="Investments" aside={money(total(data.investments))}>
+          <AccountList accounts={data.investments} bankName={bankName} />
+        </Section>
+      )}
+
+      {data.loans.length > 0 && (
+        <Section title="Loans" aside={`${money(total(data.loans))} owed`}>
+          <AccountList accounts={data.loans} bankName={bankName} />
+        </Section>
+      )}
+
+      <Section title="Linked banks" aside={real ? `${slotsLeft} of ${data.slots.cap} logins left` : undefined}>
         {data.items.length === 0 && <Empty>No banks linked yet.</Empty>}
-        <div className="grid gap-4">
+        <ul className="divide-y">
           {data.items.map((it) => (
-            <div key={it.id}>
-              <div className="mb-1 flex items-center justify-between gap-2">
-                <p className="flex items-center gap-2 text-sm font-medium"><Landmark className="size-4 text-muted-foreground" />{it.name}</p>
-                {it.status !== 'ok' && (
-                  <Button variant="outline" size="sm" disabled={!!busy} onClick={() => connect(it.id)}>
-                    <AlertTriangle /> {it.status === 'reconnect' ? 'Reconnect' : 'Fix'}
-                  </Button>
-                )}
+            <li key={it.id} className="flex items-center justify-between gap-3 py-2.5">
+              <div className="min-w-0 flex-1">
+                <p className="flex items-center gap-2 text-sm font-medium"><Landmark className="size-4 shrink-0 text-muted-foreground" /><span className="truncate">{it.name}</span></p>
+                <p className="text-xs text-muted-foreground">
+                  Linked by {it.owner}{it.lastSynced && ` · updated ${new Date(it.lastSynced).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`}
+                </p>
               </div>
-              <ul className="divide-y">
-                {byItem(it.id).map((a) => (
-                  <li key={a.id} className="flex items-center justify-between gap-3 py-2 text-sm">
-                    <span className="min-w-0 flex-1 truncate">{a.name}{a.mask && <span className="text-muted-foreground"> ··{a.mask}</span>}</span>
-                    <span className="tabular-nums">{a.current == null ? '—' : money(a.current)}</span>
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Linked by {it.owner}{it.lastSynced && ` · updated ${new Date(it.lastSynced).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`}
-              </p>
-            </div>
+              {it.status !== 'ok' && (
+                <Button variant="outline" size="sm" disabled={!!busy} onClick={() => connect(it.id)}>
+                  <AlertTriangle /> {it.status === 'reconnect' ? 'Reconnect' : 'Fix'}
+                </Button>
+              )}
+            </li>
           ))}
-        </div>
+        </ul>
 
         <div className="mt-4 grid gap-2">
           {real && confirming ? (

@@ -12,7 +12,7 @@ const TABS: { id: Tab; label: string; Icon: typeof PiggyBank }[] = [
   { id: 'budget', label: 'Budget', Icon: PiggyBank },
 ];
 
-export default function App({ summary, budget, userName }: { summary: Summary; budget: BudgetData; userName: string }) {
+export default function App({ summary, budget, userName, userEmail }: { summary: Summary; budget: BudgetData; userName: string; userEmail: string }) {
   const [tab, setTab] = useState<Tab>('overview');
   const [settingsOpen, setSettingsOpen] = useState(false);
   useEffect(() => { if (location.hash === '#budget') setTab('budget'); }, []);
@@ -21,7 +21,7 @@ export default function App({ summary, budget, userName }: { summary: Summary; b
   return (
     <>
       {/* Both stay mounted so a half-typed edit survives switching tabs. */}
-      <div hidden={tab !== 'overview'}><Dashboard initial={summary} userName={userName} notices={budget.notices} onOpenBudget={() => go('budget')} /></div>
+      <div hidden={tab !== 'overview'}><Dashboard initial={summary} userName={userName} userEmail={userEmail} notices={budget.notices} onOpenBudget={() => go('budget')} /></div>
       <div hidden={tab !== 'budget'}><Budget initial={budget} /></div>
       <div className="pb-24" aria-hidden="true" />
       <Settings open={settingsOpen} onClose={() => setSettingsOpen(false)} userName={userName} />

@@ -79,6 +79,35 @@ export const SCHEMA = [
   )`,
   // Your manual choice for one transaction. line_id NULL means "this is not spending".
   `CREATE TABLE IF NOT EXISTS txn_overrides (txn_id text PRIMARY KEY, line_id text)`,
+  // Apple subscriptions read from each person's Gmail receipts.
+  `CREATE TABLE IF NOT EXISTS apple_subscriptions (
+    owner_email    text NOT NULL,
+    key            text NOT NULL,
+    name           text NOT NULL,
+    price          double precision NOT NULL,
+    previous_price double precision,
+    months         double precision,
+    renews         text,
+    last_charged   text NOT NULL,
+    first_seen     text NOT NULL,
+    PRIMARY KEY (owner_email, key)
+  )`,
+  `CREATE TABLE IF NOT EXISTS apple_receipts (message_id text PRIMARY KEY, owner_email text NOT NULL, received text NOT NULL, ingested_at text NOT NULL)`,
+  // Credit card statement details from Plaid Liabilities.
+  `CREATE TABLE IF NOT EXISTS card_liabilities (
+    account_id         text PRIMARY KEY,
+    item_id            text NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    next_due           text,
+    minimum            double precision,
+    statement_balance  double precision,
+    statement_date     text,
+    last_payment       double precision,
+    last_payment_date  text,
+    is_overdue         boolean,
+    updated_at         text NOT NULL
+  )`,
+  // 'ok', 'consent' (needs the owner to allow it), 'unsupported', or null (not tried yet).
+  `ALTER TABLE items ADD COLUMN IF NOT EXISTS liabilities text`,
 ];
 
 let ready: Promise<Sql> | null = null;

@@ -9,5 +9,5 @@ const month = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles'
 const [summary, budget] = [await getSummary(), await getBudget(month)];
 ---
 <Base title="Budget">
-  <App client:load summary={summary} budget={budget} userName={Astro.locals.user.name} />
+  <App client:load summary={summary} budget={budget} userName={Astro.locals.user.name} userEmail={Astro.locals.user.email} />
 </Base>

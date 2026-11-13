@@ -70,8 +70,11 @@ export async function slotsUsed(sql: Sql): Promise<number> {
 /** Stable, non-identifying id for Plaid (they ask us not to send emails here). */
 const clientUserId = (email: string) => crypto.createHash('sha256').update(email.toLowerCase()).digest('hex').slice(0, 32);
 
-/** A link token opens Plaid's bank picker. With itemId it repairs an existing login instead (uses no slot). */
-export async function createLinkToken(email: string, itemId?: string): Promise<string> {
+/**
+ * A link token opens Plaid's bank picker. With itemId it reopens an existing login instead (uses no slot):
+ * to repair it, or with consent='liabilities' to ask permission for card due dates.
+ */
+export async function createLinkToken(email: string, itemId?: string, consent?: 'liabilities'): Promise<string> {
   const sql = await db();
   const base: Record<string, unknown> = {
     user: { client_user_id: clientUserId(email) },
@@ -86,6 +89,7 @@ export async function createLinkToken(email: string, itemId?: string): Promise<s
     const r = await sql.query('SELECT token_enc FROM items WHERE id = $1', [itemId]);
     if (!r.rows[0]) throw new PlaidError('That bank login was not found.', 'NOT_FOUND', 404);
     base.access_token = decrypt(r.rows[0].token_enc, tokenKey());
+    if (consent === 'liabilities') base.additional_consented_products = ['liabilities'];
   } else {
     if (plaidEnv() === 'production') {
       tokenKey(); // fail before the bank login, not after
@@ -94,6 +98,8 @@ export async function createLinkToken(email: string, itemId?: string): Promise<s
       }
     }
     base.products = ['transactions'];
+    // Card due dates and minimum payments, where the bank offers them. Optional, so banks without it still link.
+    base.optional_products = ['liabilities'];
     base.transactions = { days_requested: 730 }; // two years, so yearly renewals show up
   }
   const { link_token } = await plaid<{ link_token: string }>('/link/token/create', base);
@@ -230,10 +236,50 @@ async function syncRecurring(sql: Sql, itemId: string, token: string): Promise<v
   }
 }
 
+// Plaid answers these when a bank cannot give card details; stop asking that bank.
+const LIAB_UNSUPPORTED = ['PRODUCTS_NOT_SUPPORTED', 'NO_LIABILITY_ACCOUNTS', 'INVALID_PRODUCT', 'PRODUCT_NOT_ENABLED', 'INSTITUTION_NOT_SUPPORTED'];
+
+/** Card due dates, minimum payments and statement balances. Never fails the rest of the sync. */
+async function syncLiabilities(sql: Sql, itemId: string, token: string, status: string | null): Promise<void> {
+  if (status === 'unsupported' || status === 'consent') return; // waits for the owner to allow it (see Dashboard)
+  const hasCard = (await sql.query(`SELECT 1 FROM accounts WHERE item_id = $1 AND type = 'credit' LIMIT 1`, [itemId])).rows.length > 0;
+  if (!hasCard) return;
+  let r: any;
+  try {
+    r = await plaid<any>('/liabilities/get', { access_token: token });
+  } catch (e) {
+    const code = e instanceof PlaidError ? e.code : '';
+    if (code === 'ADDITIONAL_CONSENT_REQUIRED') await sql.query(`UPDATE items SET liabilities = 'consent' WHERE id = $1`, [itemId]);
+    else if (LIAB_UNSUPPORTED.includes(code)) await sql.query(`UPDATE items SET liabilities = 'unsupported' WHERE id = $1`, [itemId]);
+    // PRODUCT_NOT_READY and anything else: try again next sync.
+    return;
+  }
+  const now = new Date().toISOString();
+  for (const c of r.liabilities?.credit ?? []) {
+    if (!c?.account_id) continue;
+    await sql.query(
+      `INSERT INTO card_liabilities (account_id, item_id, next_due, minimum, statement_balance, statement_date, last_payment, last_payment_date, is_overdue, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       ON CONFLICT (account_id) DO UPDATE SET next_due = EXCLUDED.next_due, minimum = EXCLUDED.minimum, statement_balance = EXCLUDED.statement_balance,
+         statement_date = EXCLUDED.statement_date, last_payment = EXCLUDED.last_payment, last_payment_date = EXCLUDED.last_payment_date,
+         is_overdue = EXCLUDED.is_overdue, updated_at = EXCLUDED.updated_at`,
+      [c.account_id, itemId, c.next_payment_due_date ?? null, c.minimum_payment_amount ?? null, c.last_statement_balance ?? null,
+        c.last_statement_issue_date ?? null, c.last_payment_amount ?? null, c.last_payment_date ?? null, c.is_overdue === true, now],
+    );
+  }
+  await sql.query(`UPDATE items SET liabilities = 'ok' WHERE id = $1`, [itemId]);
+}
+
+/** After the owner allowed card due dates for a bank, ask again on the next sync. */
+export async function liabilitiesAllowed(itemId: string): Promise<void> {
+  const sql = await db();
+  await sql.query(`UPDATE items SET liabilities = NULL WHERE id = $1 AND liabilities = 'consent'`, [itemId]);
+}
+
 /** Pull the latest balances, transactions and recurring charges for every linked bank. One bank failing never blocks the rest. */
 export async function syncAll(): Promise<SyncResult[]> {
   const sql = await db();
-  const items = (await sql.query('SELECT id, institution_name, token_enc, cursor FROM items WHERE plaid_env = $1 ORDER BY created_at', [plaidEnv()])).rows;
+  const items = (await sql.query('SELECT id, institution_name, token_enc, cursor, liabilities FROM items WHERE plaid_env = $1 ORDER BY created_at', [plaidEnv()])).rows;
   const results: SyncResult[] = [];
   for (const it of items) {
     try {
@@ -242,6 +288,7 @@ export async function syncAll(): Promise<SyncResult[]> {
       const { cursor, added } = await syncTransactions(sql, it.id, token, it.cursor ?? null);
       await sql.query(`UPDATE items SET cursor = $2, status = 'ok', last_synced_at = $3 WHERE id = $1`, [it.id, cursor, new Date().toISOString()]);
       await syncRecurring(sql, it.id, token);
+      await syncLiabilities(sql, it.id, token, it.liabilities ?? null);
       results.push({ item: it.id, name: it.institution_name, added, ok: true });
     } catch (e) {
       const code = e instanceof PlaidError ? e.code : 'ERROR';
