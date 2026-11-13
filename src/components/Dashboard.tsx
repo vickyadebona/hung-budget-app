@@ -99,14 +99,16 @@ export default function Dashboard({ initial, userName, userEmail, notices = [], 
 }) {
   const [data, setData] = useState(initial);
   const [busy, setBusy] = useState<string | null>(null);
+  const [busyKey, setBusyKey] = useState<string | null>(null); // which button started the current action
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const handler = useRef<{ open(): void; destroy(): void } | null>(null);
 
   const refresh = useCallback(async () => setData(await api<Summary>('/api/summary')), []);
 
-  const run = useCallback(async (label: string, fn: () => Promise<void>) => {
+  const run = useCallback(async (label: string, fn: () => Promise<void>, key: string | null = null) => {
     setBusy(label);
+    setBusyKey(key);
     setError(null);
     try {
       await fn();
@@ -114,6 +116,7 @@ export default function Dashboard({ initial, userName, userEmail, notices = [], 
       setError(e instanceof Error ? e.message : 'Something went wrong');
     } finally {
       setBusy(null);
+      setBusyKey(null);
     }
   }, []);
 
@@ -130,7 +133,7 @@ export default function Dashboard({ initial, userName, userEmail, notices = [], 
           if (mode.itemId) await api('/api/plaid/updated', { itemId: mode.itemId, consent: mode.consent });
           else await api('/api/plaid/exchange', { publicToken, institutionName: meta?.institution?.name });
           await refresh();
-        });
+        }, mode.itemId ? `${mode.consent ?? 'fix'}:${mode.itemId}` : 'link');
       },
       onExit: (err: { error_code?: string; error_message?: string; display_message?: string } | null, meta: unknown) => {
         forgetToken();
@@ -151,18 +154,18 @@ export default function Dashboard({ initial, userName, userEmail, notices = [], 
     const saved = recallToken();
     const href = location.href;
     history.replaceState(null, '', location.pathname);
-    if (saved) void run('Finishing bank sign-in', () => openLink(saved.token, saved.mode, href));
+    if (saved) void run('Finishing bank sign-in', () => openLink(saved.token, saved.mode, href), saved.mode.itemId ? `${saved.mode.consent ?? 'fix'}:${saved.mode.itemId}` : 'link');
     else setError('The bank sign-in could not be picked up again in this browser. Nothing was linked and no slot was used. Tap Link a bank to retry.');
   }, [openLink, run]);
 
   const connect = (itemId?: string, consent?: 'liabilities') =>
     run('Opening bank picker', async () => {
-      setConfirming(false);
       const mode: LinkMode = itemId ? { itemId, consent } : {};
       const { linkToken } = await api<{ linkToken: string }>('/api/plaid/link-token', mode);
       rememberToken(linkToken, mode);
       await openLink(linkToken, mode);
-    });
+      setConfirming(false);
+    }, itemId ? `${consent ?? 'fix'}:${itemId}` : 'link');
 
   const real = data.env === 'production';
   const slotsLeft = data.slots.cap - data.slots.used;
@@ -178,9 +181,9 @@ export default function Dashboard({ initial, userName, userEmail, notices = [], 
           <p className="text-sm text-muted-foreground">Hi {userName.split(' ')[0]}</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="lg" disabled={!!busy || data.items.length === 0}
-            onClick={() => run('Refreshing', async () => { await api('/api/sync', {}); await refresh(); })}>
-            <RefreshCw className={busy === 'Refreshing' ? 'animate-spin' : ''} /> Refresh
+          <Button variant="outline" size="lg" disabled={!!busy || data.items.length === 0} loading={busyKey === 'refresh'}
+            onClick={() => run('Refreshing', async () => { await api('/api/sync', {}); await refresh(); }, 'refresh')}>
+            <RefreshCw /> Refresh
           </Button>
         </div>
       </header>
@@ -224,12 +227,35 @@ export default function Dashboard({ initial, userName, userEmail, notices = [], 
         </div>
       </div>
 
+      {data.cardDue.length > 0 && (
+        <Section title="Card payments due" aside={`${money(data.cardDue.reduce((n, c) => n + c.minimum, 0))} in minimums`}>
+          <ul className="divide-y">
+            {data.cardDue.map((c) => (
+              <li key={c.accountId} className="flex items-center justify-between gap-3 py-2.5 text-sm">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-medium">{c.name}</p>
+                  <p className={`text-xs ${c.state === 'overdue' ? 'text-destructive' : c.state === 'due-soon' ? 'font-medium text-warn-foreground' : 'text-muted-foreground'}`}>
+                    {c.state === 'overdue' ? `Overdue since ${longDay(c.due)}` : `Due ${longDay(c.due)}${inDays(c.daysLeft)}`}
+                    {c.statement != null && <span className="font-normal text-muted-foreground"> · statement {money(c.statement)}</span>}
+                    <span className="font-normal text-muted-foreground"> · {c.bank}</span>
+                  </p>
+                </div>
+                <div className="shrink-0 text-right">
+                  <p className="tabular-nums">{money(c.minimum)}</p>
+                  <p className="text-xs text-muted-foreground">minimum</p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+
       <Section title="Coming up in the next 30 days" aside={data.upcoming.length ? money(data.upcoming.reduce((n, r) => n + r.amount, 0)) : undefined}>
         {data.upcoming.length === 0 ? <Empty>Nothing predicted yet.</Empty> : (
           <ul className="divide-y">
             {data.upcoming.map((r) => (
               <li key={r.id} className="flex items-center justify-between gap-3 py-2 text-sm">
-                <span className="w-14 shrink-0 text-muted-foreground">{day(r.nextDate!)}</span>
+                <span className="min-w-14 shrink-0 text-muted-foreground">{day(r.nextDate!)}</span>
                 <span className="min-w-0 flex-1 truncate">{r.label}</span>
                 <span className="tabular-nums">{money(r.amount)}</span>
               </li>
@@ -286,7 +312,7 @@ export default function Dashboard({ initial, userName, userEmail, notices = [], 
         {consentItems.map((it) => (
           <div key={it.id} className="mt-3 flex items-center justify-between gap-3 rounded-xl bg-muted px-3 py-2 text-sm">
             <span>{it.name} needs your OK to share card due dates.</span>
-            <Button size="sm" variant="outline" disabled={!!busy || it.owner !== userEmail} onClick={() => connect(it.id, 'liabilities')}
+            <Button size="sm" variant="outline" disabled={!!busy || it.owner !== userEmail} loading={busyKey === `liabilities:${it.id}`} onClick={() => connect(it.id, 'liabilities')}
               title={it.owner !== userEmail ? `Only ${it.owner} can allow this` : undefined}>Allow</Button>
           </div>
         ))}
@@ -316,7 +342,7 @@ export default function Dashboard({ initial, userName, userEmail, notices = [], 
                 </p>
               </div>
               {it.status !== 'ok' && (
-                <Button variant="outline" size="sm" disabled={!!busy} onClick={() => connect(it.id)}>
+                <Button variant="outline" size="sm" disabled={!!busy} loading={busyKey === `fix:${it.id}`} onClick={() => connect(it.id)}>
                   <AlertTriangle /> {it.status === 'reconnect' ? 'Reconnect' : 'Fix'}
                 </Button>
               )}
@@ -330,19 +356,19 @@ export default function Dashboard({ initial, userName, userEmail, notices = [], 
               <p>This uses 1 of your {slotsLeft} remaining bank logins, and it can't be undone.
                 {data.items.length > 0 && ` Already linked: ${data.items.map((i) => i.name).join(', ')}.`} Use “Reconnect” to fix an existing bank instead.</p>
               <div className="mt-3 flex gap-2">
-                <Button size="lg" disabled={!!busy} onClick={() => connect()}>Yes, link a new bank</Button>
+                <Button size="lg" disabled={!!busy} loading={busyKey === 'link'} onClick={() => connect()}>Yes, link a new bank</Button>
                 <Button size="lg" variant="ghost" onClick={() => setConfirming(false)}>Cancel</Button>
               </div>
             </div>
           ) : (
-            <Button size="lg" disabled={!!busy || !data.configured || (real && slotsLeft <= 0)}
+            <Button size="lg" disabled={!!busy || !data.configured || (real && slotsLeft <= 0)} loading={busyKey === 'link'}
               onClick={() => (real ? setConfirming(true) : connect())}>
               <Plus /> Link a bank
             </Button>
           )}
           {!real && (
-            <Button size="lg" variant="outline" disabled={!!busy || !data.configured}
-              onClick={() => run('Linking the practice bank', async () => { await api('/api/plaid/sandbox-connect', {}); await refresh(); })}>
+            <Button size="lg" variant="outline" disabled={!!busy || !data.configured} loading={busyKey === 'practice'}
+              onClick={() => run('Linking the practice bank', async () => { await api('/api/plaid/sandbox-connect', {}); await refresh(); }, 'practice')}>
               Add the practice bank in one tap
             </Button>
           )}

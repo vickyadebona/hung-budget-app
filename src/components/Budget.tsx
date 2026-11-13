@@ -8,6 +8,8 @@ import { api, money } from './shared';
 const FREQ_LABEL: Record<string, string> = {
   weekly: 'weekly', biweekly: 'every 2 weeks', 'twice-monthly': 'twice a month', monthly: 'monthly', yearly: 'yearly',
 };
+// The current month where you live, so the jump back is right even late on the last day of a month.
+const thisMonth = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit' }).format(new Date()).slice(0, 7);
 const monthName = (m: string) => new Date(m + '-15T12:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 const day = (d: string) => new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 const field = 'h-10 w-full rounded-lg border border-input bg-background px-3 text-base outline-none focus-visible:ring-3 focus-visible:ring-ring/50';
@@ -50,8 +52,8 @@ function Bar({ spent, limit }: { spent: number; limit: number }) {
   );
 }
 
-function Editor({ draft, groups, busy, onSave, onDelete, onCancel }: {
-  draft: Draft; groups: string[]; busy: boolean;
+function Editor({ draft, groups, saving, removing, onSave, onDelete, onCancel }: {
+  draft: Draft; groups: string[]; saving: boolean; removing: boolean;
   onSave: (d: Draft) => void; onDelete?: () => void; onCancel: () => void;
 }) {
   const [d, setD] = useState(draft);
@@ -90,10 +92,10 @@ function Editor({ draft, groups, busy, onSave, onDelete, onCancel }: {
         <input className={field} value={d.note} onChange={set('note')} maxLength={200} />
       </label>
       <div className="flex flex-wrap gap-2">
-        <Button size="lg" type="submit" disabled={busy}>Save</Button>
+        <Button size="lg" type="submit" loading={saving} disabled={removing}>Save</Button>
         <Button size="lg" type="button" variant="ghost" onClick={onCancel}>Cancel</Button>
         {onDelete && (sure
-          ? <Button size="lg" type="button" variant="destructive" className="ml-auto" disabled={busy} onClick={onDelete}>Yes, remove it</Button>
+          ? <Button size="lg" type="button" variant="destructive" className="ml-auto" loading={removing} disabled={saving} onClick={onDelete}>Yes, remove it</Button>
           : <Button size="lg" type="button" variant="ghost" className="ml-auto text-destructive" onClick={() => setSure(true)}>Remove</Button>)}
       </div>
     </form>
@@ -110,12 +112,15 @@ export default function Budget({ initial }: { initial: BudgetData }) {
   const [restored, setRestored] = useState<number | null>(null);
 
   const load = useCallback(async (month: string) => setData(await api<BudgetData>(`/api/budget?month=${month}`)), []);
-  const run = useCallback(async (fn: () => Promise<void>) => {
+  const [busyKey, setBusyKey] = useState<string | null>(null); // which button started the current action
+  const run = useCallback(async (fn: () => Promise<void>, key: string | null = null) => {
     setBusy(true);
+    setBusyKey(key);
     setError(null);
-    try { await fn(); } catch (e) { setError(e instanceof Error ? e.message : 'Something went wrong'); } finally { setBusy(false); }
+    try { await fn(); } catch (e) { setError(e instanceof Error ? e.message : 'Something went wrong'); } finally { setBusy(false); setBusyKey(null); }
   }, []);
 
+  const monthLoading = busyKey === 'prev' || busyKey === 'next' || busyKey === 'today';
   const t = data.totals;
   const s = data.suggestion;
   const groupNames = data.groups.map((g) => g.name);
@@ -128,8 +133,8 @@ export default function Budget({ initial }: { initial: BudgetData }) {
     await api('/api/budget/line', { ...d, amount, group: d.direction === 'in' ? 'Income' : d.group });
     setEditing(null);
     await load(data.month);
-  });
-  const remove = (id: string) => run(async () => { await api('/api/budget/line', { id, delete: true }); setEditing(null); await load(data.month); });
+  }, 'save');
+  const remove = (id: string) => run(async () => { await api('/api/budget/line', { id, delete: true }); setEditing(null); await load(data.month); }, 'remove');
   const toDraft = (l: BudgetLine): Draft => ({ id: l.id, name: l.name, group: l.group, amount: String(l.amount), frequency: l.frequency, kind: l.kind, direction: l.direction, note: l.note });
 
   return (
@@ -137,14 +142,19 @@ export default function Budget({ initial }: { initial: BudgetData }) {
       <header className="flex items-center justify-between gap-3 pt-2">
         <h1 className="text-xl font-semibold tracking-tight">Budget</h1>
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon" aria-label="Previous month" disabled={busy} onClick={() => run(() => load(shiftMonth(data.month, -1)))}><ChevronLeft /></Button>
+          {data.month !== thisMonth() && (
+            <Button variant="outline" size="sm" className="mr-1" disabled={busy} loading={busyKey === 'today'}
+              onClick={() => run(() => load(thisMonth()), 'today')}>Today</Button>
+          )}
+          <Button variant="ghost" size="icon" aria-label="Previous month" disabled={busy} loading={busyKey === 'prev'} onClick={() => run(() => load(shiftMonth(data.month, -1)), 'prev')}><ChevronLeft /></Button>
           <span className="min-w-32 text-center text-sm font-medium">{monthName(data.month)}</span>
-          <Button variant="ghost" size="icon" aria-label="Next month" disabled={busy} onClick={() => run(() => load(shiftMonth(data.month, 1)))}><ChevronRight /></Button>
+          <Button variant="ghost" size="icon" aria-label="Next month" disabled={busy} loading={busyKey === 'next'} onClick={() => run(() => load(shiftMonth(data.month, 1)), 'next')}><ChevronRight /></Button>
         </div>
       </header>
 
       {error && <p role="alert" className="rounded-xl bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
       <Notices notices={data.notices} />
+      <div className={`flex flex-col gap-4 transition-opacity ${monthLoading ? 'pointer-events-none opacity-50' : ''}`} aria-busy={monthLoading}>
 
       <div className="grid grid-cols-2 gap-3">
         <div className="rounded-2xl border bg-card p-4">
@@ -211,7 +221,7 @@ export default function Budget({ initial }: { initial: BudgetData }) {
             {g.lines.map((l) => (
               <li key={l.id} className="py-2.5">
                 {editing === l.id ? (
-                  <Editor draft={toDraft(l)} groups={groupNames} busy={busy} onSave={save} onDelete={() => remove(l.id)} onCancel={() => setEditing(null)} />
+                  <Editor draft={toDraft(l)} groups={groupNames} saving={busyKey === 'save'} removing={busyKey === 'remove'} onSave={save} onDelete={() => remove(l.id)} onCancel={() => setEditing(null)} />
                 ) : (
                   <button type="button" className="block w-full text-left" onClick={() => setEditing(l.id)} aria-label={`Edit ${l.name}`}>
                     <span className="flex items-baseline justify-between gap-3 text-sm">
@@ -233,8 +243,10 @@ export default function Budget({ initial }: { initial: BudgetData }) {
         </section>
       ))}
 
+      </div>
+
       {editing === 'new'
-        ? <Editor draft={blank} groups={groupNames} busy={busy} onSave={save} onCancel={() => setEditing(null)} />
+        ? <Editor draft={blank} groups={groupNames} saving={busyKey === 'save'} removing={busyKey === 'remove'} onSave={save} onCancel={() => setEditing(null)} />
         : <Button size="lg" variant="outline" onClick={() => setEditing('new')}><Plus /> Add a budget line</Button>}
 
       {data.unassigned.length > 0 && (
@@ -326,10 +338,10 @@ export default function Budget({ initial }: { initial: BudgetData }) {
                   </ul>}
               <div className="flex gap-2">
                 {preview.rows.length > 0 && (
-                  <Button size="lg" disabled={busy} onClick={() => run(async () => {
+                  <Button size="lg" disabled={busy} loading={busyKey === 'import'} onClick={() => run(async () => {
                     await api('/api/budget/import', { text: file.text, mapping: preview.mapping, apply: true });
                     setFile(null); setPreview(null); await load(data.month);
-                  })}>Import {preview.rows.length} {preview.rows.length === 1 ? 'row' : 'rows'}</Button>
+                  }, 'import')}>Import {preview.rows.length} {preview.rows.length === 1 ? 'row' : 'rows'}</Button>
                 )}
                 <Button size="lg" variant="ghost" onClick={() => { setFile(null); setPreview(null); }}>Cancel</Button>
               </div>

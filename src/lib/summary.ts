@@ -108,24 +108,23 @@ export async function getSummary() {
       return { ...a, details, state, daysLeft: details?.next_due ? daysUntil(details.next_due, today) : null };
     });
 
-  const cardBills = cards
-    .filter((c) => c.details?.next_due && (c.state === 'due' || c.state === 'due-soon' || c.state === 'overdue'))
-    .map((c) => ({
-      id: 'card:' + c.id,
-      label: `${c.name}${c.mask ? ' ··' + c.mask : ''} minimum`,
-      frequency: 'monthly',
-      amount: c.details!.minimum ?? 0,
-      monthly: 0,
-      lastDate: c.details!.last_payment_date,
-      nextDate: c.details!.next_due,
-      category: null as string | null,
-      source: 'card' as const,
-      priceChanged: false,
-    }));
-
-  const upcoming = [...all, ...cardBills]
-    .filter((r) => r.nextDate && (r.source === 'card' ? r.nextDate <= horizon : r.nextDate >= today && r.nextDate <= horizon))
+  const upcoming = all
+    .filter((r) => r.nextDate && r.nextDate >= today && r.nextDate <= horizon)
     .sort((a, b) => a.nextDate!.localeCompare(b.nextDate!));
+  // Unpaid card statements, overdue first, then by due date. Shown in their own section.
+  const cardDue = cards
+    .filter((c) => c.details?.next_due && (c.state === 'due' || c.state === 'due-soon' || c.state === 'overdue'))
+    .sort((a, b) => a.details!.next_due!.localeCompare(b.details!.next_due!))
+    .map((c) => ({
+      accountId: c.id,
+      name: `${c.name}${c.mask ? ' ··' + c.mask : ''}`,
+      bank: items.find((i) => i.id === c.item_id)?.institution_name ?? '',
+      state: c.state,
+      due: c.details!.next_due!,
+      daysLeft: c.daysLeft,
+      minimum: c.details!.minimum ?? 0,
+      statement: c.details!.statement_balance,
+    }));
   const cardNotices = cards
     .filter((c) => needsAttention(c.state))
     .map((c) => ({ accountId: c.id, name: `${c.name}${c.mask ? ' ··' + c.mask : ''}`, state: c.state, minimum: c.details?.minimum ?? null, due: c.details?.next_due ?? null, daysLeft: c.daysLeft }));
@@ -145,6 +144,7 @@ export async function getSummary() {
     loans: accounts.filter((a) => a.type === 'loan'),
     cards,
     cardNotices,
+    cardDue,
     appleCount: apple.length,
     totals: { assets, debts, net: assets - debts, monthlyRecurring: all.reduce((n, r) => n + r.monthly, 0) },
     recurring: all,
