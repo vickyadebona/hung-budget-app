@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { env } from './auth';
 import { db, getMeta, setMeta, type Sql } from './db';
 import { decrypt, encrypt, keyFromHex } from './secrets';
+import { deleteTransactions, upsertTransactions } from './txn-store';
 
 /** Talks to Plaid's REST API directly (plain JSON over HTTPS), so there is no SDK to keep up to date. */
 
@@ -172,22 +173,9 @@ async function syncTransactions(sql: Sql, itemId: string, token: string, startCu
       if (e instanceof PlaidError && e.code === 'TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION') continue;
       throw e;
     }
-    for (const t of added) {
-      await sql.query(
-        `INSERT INTO transactions (id, item_id, account_id, date, name, merchant_name, amount, category, category_detail, pending, channel)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-         ON CONFLICT (id) DO UPDATE SET date = EXCLUDED.date, name = EXCLUDED.name, merchant_name = EXCLUDED.merchant_name,
-           amount = EXCLUDED.amount, category = EXCLUDED.category, category_detail = EXCLUDED.category_detail,
-           pending = EXCLUDED.pending, channel = EXCLUDED.channel`,
-        [
-          t.transaction_id, itemId, t.account_id, t.date, t.name ?? '', t.merchant_name ?? null, t.amount,
-          t.personal_finance_category?.primary ?? null, t.personal_finance_category?.detailed ?? null,
-          t.pending === true, t.payment_channel ?? null,
-        ],
-      );
-    }
-    for (const id of removed) await sql.query('DELETE FROM transactions WHERE id = $1', [id]);
-    return { cursor, added: added.length };
+    const saved = await upsertTransactions(sql, itemId, added);
+    await deleteTransactions(sql, removed);
+    return { cursor, added: saved };
   }
   throw new PlaidError('Bank data kept changing while reading it. Try again in a minute.', 'SYNC_RETRY', 503);
 }

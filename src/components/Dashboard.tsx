@@ -19,6 +19,21 @@ const FREQ: Record<string, string> = {
 };
 const LINK_KEY = 'bud_link_token';
 
+// Kept in localStorage (not sessionStorage) because a bank's own app can send you back in a new tab.
+// Link tokens expire after 4 hours, so an old one is ignored.
+function rememberToken(token: string) {
+  try { localStorage.setItem(LINK_KEY, JSON.stringify({ token, at: Date.now() })); } catch { /* private mode */ }
+}
+function recallToken(): string | null {
+  try {
+    const v = JSON.parse(localStorage.getItem(LINK_KEY) ?? 'null');
+    return v && typeof v.token === 'string' && Date.now() - v.at < 3.5 * 3600_000 ? v.token : null;
+  } catch { return null; }
+}
+function forgetToken() {
+  try { localStorage.removeItem(LINK_KEY); } catch { /* private mode */ }
+}
+
 function loadPlaid(): Promise<void> {
   if (window.Plaid) return Promise.resolve();
   return new Promise((resolve, reject) => {
@@ -74,13 +89,13 @@ export default function Dashboard({ initial, userName, notices = [], onOpenBudge
       token: linkToken,
       receivedRedirectUri,
       onSuccess: (publicToken: string, meta: { institution?: { name?: string } }) => {
-        sessionStorage.removeItem(LINK_KEY);
+        forgetToken();
         void run('Saving your bank', async () => {
           await api('/api/plaid/exchange', { publicToken, institutionName: meta?.institution?.name });
           await refresh();
         });
       },
-      onExit: () => sessionStorage.removeItem(LINK_KEY),
+      onExit: () => forgetToken(),
     });
     handler.current!.open();
   }, [refresh, run]);
@@ -88,17 +103,18 @@ export default function Dashboard({ initial, userName, notices = [], onOpenBudge
   // Banks like Bank of America send you to their own site and back; pick the flow up again on return.
   useEffect(() => {
     if (!new URLSearchParams(location.search).has('oauth_state_id')) return;
-    const saved = sessionStorage.getItem(LINK_KEY);
+    const saved = recallToken();
     const href = location.href;
     history.replaceState(null, '', location.pathname);
     if (saved) void run('Finishing bank sign-in', () => openLink(saved, href));
+    else setError('The bank sign-in could not be picked up again in this browser. Nothing was linked and no slot was used. Tap Link a bank to retry.');
   }, [openLink, run]);
 
   const connect = (itemId?: string) =>
     run('Opening bank picker', async () => {
       setConfirming(false);
       const { linkToken } = await api<{ linkToken: string }>('/api/plaid/link-token', itemId ? { itemId } : {});
-      sessionStorage.setItem(LINK_KEY, linkToken);
+      rememberToken(linkToken);
       await openLink(linkToken);
     });
 

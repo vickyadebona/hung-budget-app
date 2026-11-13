@@ -9,7 +9,8 @@ const onVercel = !!process.env.VERCEL;
 
 export default defineConfig({
   output: 'server',
-  adapter: onVercel ? vercel() : node({ mode: 'standalone' }),
+  // A first bank sync pulls up to two years of history, so give requests a full minute.
+  adapter: onVercel ? vercel({ maxDuration: 60 }) : node({ mode: 'standalone' }),
   integrations: [react()],
   server: { port: 4321 },
   vite: { plugins: [tailwindcss()] },

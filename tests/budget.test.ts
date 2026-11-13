@@ -151,3 +151,22 @@ test('reads quoted cells with line breaks, and semicolon files', () => {
   assert.deepEqual(readTable('a,"line one\nline two",c\n\n1,2,3'), [['a', 'line one\nline two', 'c'], ['1', '2', '3']]);
   assert.deepEqual(readTable('Name;Amount\nRent;3017'), [['Name', 'Amount'], ['Rent', '3017']]);
 });
+
+test('transactions save in batches and re-syncing updates rather than duplicates', async () => {
+  const { PGlite } = await import('@electric-sql/pglite');
+  const { upsertTransactions, deleteTransactions } = await import('../src/lib/txn-store.ts');
+  const pg = new PGlite();
+  await pg.query('CREATE TABLE transactions (id text PRIMARY KEY, item_id text, account_id text, date text, name text, merchant_name text, amount double precision, category text, category_detail text, pending boolean, channel text)');
+  const make = (i: number, amount: number) => ({ transaction_id: 't' + i, account_id: 'a', date: '2026-11-01', name: 'Shop ' + i, amount, pending: false, personal_finance_category: { primary: 'FOOD_AND_DRINK', detailed: 'FOOD_AND_DRINK_GROCERIES' } });
+  const rows = Array.from({ length: 250 }, (_, i) => make(i, i));
+  assert.equal(await upsertTransactions(pg, 'item', [...rows, make(3, 999)]), 250); // t3 appears twice: last copy wins
+  await upsertTransactions(pg, 'item', [make(7, 123.45)]);
+  await deleteTransactions(pg, ['t0', 't1']);
+  const r = await pg.query<{ n: number; total: number }>('SELECT count(*)::int AS n, sum(amount) AS total FROM transactions');
+  assert.equal(r.rows[0].n, 248);
+  const one = await pg.query<{ amount: number; category_detail: string }>("SELECT amount, category_detail FROM transactions WHERE id IN ('t3','t7') ORDER BY id");
+  assert.deepEqual(one.rows.map((x) => x.amount), [999, 123.45]);
+  assert.equal(one.rows[0].category_detail, 'FOOD_AND_DRINK_GROCERIES');
+  assert.equal(await upsertTransactions(pg, 'item', []), 0);
+  await pg.close();
+});
