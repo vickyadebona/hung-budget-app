@@ -3,6 +3,7 @@ import { itemCap, plaidConfigured, plaidEnv, slotsUsed } from './plaid';
 import { findRecurring, merchantKey, monthlyCost } from './recurring';
 import { appleSubscriptions } from './apple-store';
 import { appleFrequency, cardState, daysUntil, needsAttention } from './cards';
+import { sharedAccounts } from './dedupe';
 
 // Bank-side lumps that the Apple receipts break down item by item.
 const APPLE_BILLING = /apple\.com|itunes|apple services/i;
@@ -20,13 +21,21 @@ export async function getSummary() {
   const ids = items.map((i) => i.id);
   const none = ids.length === 0;
 
+  // Accounts you both linked (joint checking, a shared card) are counted once, under the first login.
+  const { dup, shared } = await sharedAccounts(sql, envName);
+  const hidden = [...dup.keys()];
   const accounts = none ? [] : (await sql.query(
-    'SELECT id, item_id, name, mask, type, subtype, current, available FROM accounts WHERE item_id = ANY($1) ORDER BY type, name', [ids],
-  )).rows.map((a) => ({ ...a, current: a.current == null ? null : Number(a.current), available: a.available == null ? null : Number(a.available) }));
+    'SELECT id, item_id, name, mask, type, subtype, current, available FROM accounts WHERE item_id = ANY($1) AND NOT (id = ANY($2)) ORDER BY type, name', [ids, hidden],
+  )).rows.map((a) => ({
+    ...a,
+    current: a.current == null ? null : Number(a.current),
+    available: a.available == null ? null : Number(a.available),
+    shared: shared.has(a.id),
+  }));
 
   const streams = none ? [] : (await sql.query(
     `SELECT id, item_id, description, merchant_name, frequency, avg_amount, last_amount, last_date, next_date, status, category
-     FROM recurring WHERE item_id = ANY($1) AND direction = 'out' AND is_active AND COALESCE(status, '') <> 'TOMBSTONED'`, [ids],
+     FROM recurring WHERE item_id = ANY($1) AND NOT (account_id = ANY($2)) AND direction = 'out' AND is_active AND COALESCE(status, '') <> 'TOMBSTONED'`, [ids, hidden],
   )).rows;
 
   const recurring = streams
@@ -49,7 +58,7 @@ export async function getSummary() {
 
   // Second opinion: charges our own rules think repeat but Plaid did not list.
   const txns = none ? [] : (await sql.query(
-    'SELECT id, date, name, merchant_name, amount FROM transactions WHERE item_id = ANY($1) AND NOT pending AND amount > 0', [ids],
+    'SELECT id, date, name, merchant_name, amount FROM transactions WHERE item_id = ANY($1) AND NOT (account_id = ANY($2)) AND NOT pending AND amount > 0', [ids, hidden],
   )).rows.map((t) => ({ id: t.id, date: t.date, name: t.name, merchant: t.merchant_name, amount: Number(t.amount) }));
   const known = new Set(streams.map((s) => merchantKey({ name: s.description, merchant: s.merchant_name })));
   const extra = findRecurring(txns)
@@ -91,7 +100,12 @@ export async function getSummary() {
 
   // Credit cards with their statement details (when the bank shares them).
   const liab = none ? [] : (await sql.query('SELECT * FROM card_liabilities WHERE item_id = ANY($1)', [ids])).rows;
-  const liabBy = new Map(liab.map((l) => [l.account_id as string, l]));
+  const liabBy = new Map<string, any>();
+  for (const l of liab) {
+    const kept = dup.get(l.account_id) ?? l.account_id; // details from the other login count for the kept account
+    const prev = liabBy.get(kept);
+    if (!prev || String(l.updated_at) > String(prev.updated_at)) liabBy.set(kept, l);
+  }
   const num = (v: unknown) => (v == null ? null : Number(v));
   const cards = accounts
     .filter((a) => a.type === 'credit')

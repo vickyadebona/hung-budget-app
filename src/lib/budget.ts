@@ -4,6 +4,7 @@ import path from 'node:path';
 import { db, getMeta, setMeta, type Sql } from './db';
 import { plaidEnv } from './plaid';
 import { merchantKey } from './recurring';
+import { sharedAccounts } from './dedupe';
 import {
   FREQUENCIES, assign, cleanMapping, columnLabels, guessColumns, isIncome, limitFor, monthRange, noticeFor, perMonth, readTable, rowsFromTable, suggest,
   type BudgetTxn, type Frequency, type Line, type Mapping, type Notice, type SheetRow,
@@ -189,8 +190,8 @@ export async function getBudget(month: string) {
   const txns: BudgetTxn[] = (await sql.query(
     `SELECT t.id, t.date, t.name, t.merchant_name, t.amount, t.category, t.category_detail
      FROM transactions t JOIN items i ON i.id = t.item_id
-     WHERE i.plaid_env = $1 AND NOT t.pending AND t.date >= $2 AND t.date < $3 ORDER BY t.date DESC`,
-    [plaidEnv(), from, to],
+     WHERE i.plaid_env = $1 AND NOT t.pending AND t.date >= $2 AND t.date < $3 AND NOT (t.account_id = ANY($4)) ORDER BY t.date DESC`,
+    [plaidEnv(), from, to, [...(await sharedAccounts(sql, plaidEnv())).dup.keys()]],
   )).rows.map((r) => ({
     id: r.id, date: r.date, name: r.name, merchant: r.merchant_name, amount: Number(r.amount), category: r.category, detail: r.category_detail,
   }));

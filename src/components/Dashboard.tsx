@@ -68,7 +68,7 @@ function AccountList({ accounts, bankName }: { accounts: Account[]; bankName: (i
         <li key={a.id} className="flex items-center justify-between gap-3 py-2 text-sm">
           <span className="min-w-0 flex-1">
             <span className="block truncate">{a.name}{a.mask && <span className="text-muted-foreground"> ··{a.mask}</span>}</span>
-            <span className="block truncate text-xs text-muted-foreground">{bankName(a.item_id)}</span>
+            <span className="block truncate text-xs text-muted-foreground">{bankName(a.item_id)}{a.shared && ' · shared'}</span>
           </span>
           <span className="tabular-nums">{a.current == null ? '—' : money(a.current)}</span>
         </li>
@@ -303,7 +303,7 @@ export default function Dashboard({ initial, userName, userEmail, notices = [], 
                 </div>
                 <p className={`text-xs ${c.state === 'overdue' ? 'text-destructive' : c.state === 'due-soon' ? 'font-medium text-warn-foreground' : 'text-muted-foreground'}`}>
                   {cardLine(c)}
-                  <span className="text-muted-foreground"> · {bankName(c.item_id)}</span>
+                  <span className="text-muted-foreground"> · {bankName(c.item_id)}{c.shared && ' · shared'}</span>
                 </p>
               </li>
             ))}
