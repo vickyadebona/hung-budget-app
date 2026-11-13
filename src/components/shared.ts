@@ -1,0 +1,12 @@
+export const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+
+export async function api<T>(path: string, body?: unknown): Promise<T> {
+  const res = await fetch(path, body === undefined ? undefined : {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Something went wrong');
+  return data as T;
+}

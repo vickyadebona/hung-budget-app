@@ -1,0 +1,13 @@
+---
+import Base from '@/layouts/Base.astro';
+import App from '@/components/App.tsx';
+import { getSummary } from '@/lib/summary';
+import { getBudget } from '@/lib/budget';
+
+// "This month" in Los Angeles, so the budget does not roll over at 4pm on the last day.
+const month = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit' }).format(new Date()).slice(0, 7);
+const [summary, budget] = [await getSummary(), await getBudget(month)];
+---
+<Base title="Budget">
+  <App client:load summary={summary} budget={budget} userName={Astro.locals.user.name} />
+</Base>
