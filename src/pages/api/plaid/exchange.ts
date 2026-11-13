@@ -11,6 +11,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
     const results = await syncAll();
     return json({ itemId, results });
   } catch (e) {
+    if (!(e instanceof PlaidError)) console.error('[exchange]', e instanceof Error ? e.stack ?? e.message : e);
     if (e instanceof PlaidError) return json({ error: e.message, code: e.code }, 502);
     return json({ error: e instanceof Error ? e.message : 'Could not finish linking' }, 500);
   }

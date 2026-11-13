@@ -95,7 +95,15 @@ export default function Dashboard({ initial, userName, notices = [], onOpenBudge
           await refresh();
         });
       },
-      onExit: () => forgetToken(),
+      onExit: (err: { error_code?: string; error_message?: string; display_message?: string } | null, meta: unknown) => {
+        forgetToken();
+        if (!err) return; // closed by choice
+        void fetch('/api/plaid/link-event', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ event: 'exit', error: err, metadata: meta }),
+        }).catch(() => {});
+        setError(`${err.display_message || err.error_message || 'The bank sign-in stopped with an error.'}${err.error_code ? ` (${err.error_code})` : ''}`);
+      },
     });
     handler.current!.open();
   }, [refresh, run]);
@@ -134,7 +142,6 @@ export default function Dashboard({ initial, userName, notices = [], onOpenBudge
             onClick={() => run('Refreshing', async () => { await api('/api/sync', {}); await refresh(); })}>
             <RefreshCw className={busy === 'Refreshing' ? 'animate-spin' : ''} /> Refresh
           </Button>
-          <form method="post" action="/auth/logout"><Button variant="ghost" size="lg" type="submit">Sign out</Button></form>
         </div>
       </header>
 

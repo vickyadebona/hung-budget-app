@@ -12,7 +12,7 @@ export class PlaidError extends Error {
   code: string;
   status: number;
   constructor(message: string, code: string, status: number) {
-    super(message);
+    super(code && code !== 'UNKNOWN' && !['NOT_CONFIGURED', 'SLOT_CAP', 'NOT_FOUND', 'NOT_SANDBOX', 'SYNC_RETRY'].includes(code) ? `${message} (${code})` : message);
     this.code = code;
     this.status = status;
   }
@@ -40,7 +40,11 @@ async function plaid<T = any>(path: string, body: Record<string, unknown>): Prom
   });
   const data = (await res.json().catch(() => ({}))) as any;
   if (!res.ok) {
-    // Never include the request body here: it holds the secret.
+    // Never log the request body: it holds the secret and access tokens. Codes and ids only.
+    console.error('[plaid]', JSON.stringify({
+      endpoint: path, env: plaidEnv(), status: res.status, error_type: data.error_type, error_code: data.error_code,
+      error_message: data.error_message, display_message: data.display_message, request_id: data.request_id,
+    }));
     throw new PlaidError(data.error_message || `Plaid request failed (${res.status})`, data.error_code || 'UNKNOWN', res.status);
   }
   return data as T;
@@ -243,6 +247,7 @@ export async function syncAll(): Promise<SyncResult[]> {
       const code = e instanceof PlaidError ? e.code : 'ERROR';
       // ITEM_LOGIN_REQUIRED means the bank wants the owner to sign in again ("Reconnect" in the app).
       await sql.query('UPDATE items SET status = $2 WHERE id = $1', [it.id, code === 'ITEM_LOGIN_REQUIRED' ? 'reconnect' : 'error']);
+      console.error('[sync]', JSON.stringify({ item: it.id, bank: it.institution_name, code, message: e instanceof Error ? e.message : String(e) }));
       results.push({ item: it.id, name: it.institution_name, added: 0, ok: false, error: e instanceof Error ? e.message : 'Sync failed' });
     }
   }
