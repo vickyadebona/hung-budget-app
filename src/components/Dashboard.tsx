@@ -123,7 +123,7 @@ export default function Dashboard({ initial, userName, notices = [], onOpenBudge
   const byItem = (id: string) => data.accounts.filter((a) => a.item_id === id);
 
   return (
-    <div className="mx-auto flex min-h-svh w-full max-w-2xl flex-col gap-4 p-4 pb-28">
+    <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-4 pb-6">
       <header className="flex items-center justify-between gap-3 pt-2">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Budget</h1>

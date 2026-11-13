@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { LayoutDashboard, PiggyBank } from 'lucide-react';
 import Dashboard from './Dashboard';
 import Budget from './Budget';
+import ThemeToggle from './ThemeToggle';
 import type { Summary } from '@/lib/summary';
 import type { Budget as BudgetData } from '@/lib/budget';
 
@@ -21,6 +22,10 @@ export default function App({ summary, budget, userName }: { summary: Summary; b
       {/* Both stay mounted so a half-typed edit survives switching tabs. */}
       <div hidden={tab !== 'overview'}><Dashboard initial={summary} userName={userName} notices={budget.notices} onOpenBudget={() => go('budget')} /></div>
       <div hidden={tab !== 'budget'}><Budget initial={budget} /></div>
+      <footer className="mx-auto flex w-full max-w-2xl items-center justify-between gap-3 px-4 pb-28">
+        <span className="text-sm text-muted-foreground">Appearance</span>
+        <ThemeToggle />
+      </footer>
       <nav aria-label="Sections" className="fixed inset-x-0 bottom-0 border-t bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur">
         <div className="mx-auto grid max-w-2xl grid-cols-2">
           {TABS.map(({ id, label, Icon }) => (
