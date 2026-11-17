@@ -1,9 +1,10 @@
 ---
 import Base from '@/layouts/Base.astro';
 import { buttonVariants } from '@/components/ui/button';
-import { googleConfigured, env } from '../../lib/auth';
+import { demoEnabled, googleConfigured, env } from '../../lib/auth';
 const google = googleConfigured();
 const dev = env('AUTH_DEV') === '1';
+const demo = demoEnabled();
 const error = Astro.url.searchParams.get('error');
 const messages: Record<string, string> = {
   denied: 'That Google account is not on the allowed list.',
@@ -23,6 +24,12 @@ const btn = buttonVariants({ variant: 'outline', size: 'lg' }) + ' w-full';
         {google && <a class={btn} href="/auth/google">Continue with Google</a>}
         {dev && <a class={btn} href="/auth/dev">Local dev sign-in (no Google)</a>}
       </div>
+      {demo && (
+        <form method="post" action="/auth/demo" class="mt-6 border-t pt-6">
+          <button type="submit" class={buttonVariants({ variant: 'ghost', size: 'lg' }) + ' w-full'}>View the demo</button>
+          <p class="mt-1 text-xs text-muted-foreground">Made-up accounts, safe to show anyone.</p>
+        </form>
+      )}
       {!google && !dev && <p class="text-sm text-muted-foreground">Sign-in is not set up yet. See the README: add Google credentials to <code>.env</code>.</p>}
     </div>
   </main>

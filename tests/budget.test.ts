@@ -70,7 +70,7 @@ test('the starter budget file is well formed', { skip: !fs.existsSync('seed/budg
 });
 
 test('notices: over budget, or $50 or less left', () => {
-  const groceries = line('g', [], { name: 'Groceries', amount: 800 });
+  const groceries = line('g', [], { name: 'Groceries', amount: 800, kind: 'variable' });
   assert.equal(noticeFor(groceries, 700), null);
   assert.deepEqual(noticeFor(groceries, 760), { lineId: 'g', name: 'Groceries', level: 'low', left: 40, limit: 800 });
   assert.equal(noticeFor(groceries, 800)?.level, 'low');
@@ -80,7 +80,12 @@ test('notices: over budget, or $50 or less left', () => {
   assert.equal(noticeFor(line('s', [], { amount: 40 }), 5), null);
   assert.equal(noticeFor(line('s', [], { amount: 40 }), 25)?.level, 'low');
   // a yearly bill is measured against the yearly amount
-  assert.equal(noticeFor(line('y', [], { amount: 139, frequency: 'yearly' }), 139)?.level, 'low');
+  assert.equal(noticeFor(line('y', [], { amount: 139, frequency: 'yearly', kind: 'variable' }), 139)?.level, 'low');
+  // a fixed bill paid exactly in full is done, not "low"; overpaying it is still "over"
+  assert.equal(noticeFor(line('y', [], { amount: 139, frequency: 'yearly' }), 139), null);
+  assert.equal(noticeFor(line('rent', [], { amount: 2150 }), 2150), null);
+  assert.equal(noticeFor(line('rent', [], { amount: 2150 }), 2160)?.level, 'over');
+  assert.equal(noticeFor(line('phone', [], { amount: 85 }), 60)?.level, 'low');
   assert.equal(noticeFor(line('y', [], { amount: 600, frequency: 'yearly' }), 300), null);
   assert.equal(noticeFor(line('i', [], { direction: 'in' }), 999), null);
 });

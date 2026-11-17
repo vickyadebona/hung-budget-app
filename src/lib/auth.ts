@@ -4,10 +4,17 @@ export interface Session {
   email: string;
   name: string;
   exp: number; // unix seconds
+  demo?: boolean; // a demo viewer: sees only made-up data (see db.ts)
 }
 
 export const COOKIE = 'bud_session';
 export const SESSION_DAYS = 30;
+export const DEMO_HOURS = 12;
+
+/** Demo mode is on unless DEMO_MODE=off. It only ever shows made-up data. */
+export function demoEnabled(): boolean {
+  return env('DEMO_MODE').toLowerCase() !== 'off';
+}
 
 export function env(name: string): string {
   return process.env[name] ?? ((import.meta.env ?? {}) as Record<string, string | undefined>)[name] ?? '';
@@ -39,11 +46,12 @@ function sign(data: string): string {
   return crypto.createHmac('sha256', secret()).update(data).digest('base64url');
 }
 
-export function createSession(email: string, name: string): string {
+export function createSession(email: string, name: string, demo = false): string {
   const payload: Session = {
     email: email.toLowerCase(),
     name,
-    exp: Math.floor(Date.now() / 1000) + SESSION_DAYS * 86400,
+    exp: Math.floor(Date.now() / 1000) + (demo ? DEMO_HOURS * 3600 : SESSION_DAYS * 86400),
+    ...(demo ? { demo: true } : {}),
   };
   const body = b64(JSON.stringify(payload));
   return `${body}.${sign(body)}`;
@@ -60,6 +68,7 @@ export function readSession(value: string | undefined): Session | null {
   try {
     const s = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as Session;
     if (typeof s.exp !== 'number' || s.exp < Date.now() / 1000) return null;
+    if (s.demo === true) return demoEnabled() ? s : null; // demo viewers are not on the allowed list, and never reach real data
     if (!isAllowed(s.email)) return null; // removing someone from ALLOWED_EMAILS signs them out
     return s;
   } catch {

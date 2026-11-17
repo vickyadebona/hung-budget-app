@@ -2,7 +2,9 @@ import { db } from './db';
 import { itemCap, plaidConfigured, plaidEnv, slotsUsed } from './plaid';
 import { findRecurring, merchantKey, monthlyCost } from './recurring';
 import { appleSubscriptions } from './apple-store';
-import { appleFrequency, cardState, daysUntil, needsAttention } from './cards';
+import { linkSubscriptionsFor } from './link-store';
+import { linkFrequency, sameMerchant } from './link';
+import { appleFrequency, cardState, cleanAprs, daysUntil, interestCharged, needsAttention, promoPlan, zeroAprs } from './cards';
 import { sharedAccounts } from './dedupe';
 
 // Bank-side lumps that the Apple receipts break down item by item.
@@ -94,8 +96,25 @@ export async function getSummary() {
     owner: a.owner,
     trial: a.trial,
   }));
-  const bankRows = [...recurring, ...extra].filter((r) => apple.length === 0 || !APPLE_BILLING.test(r.label));
-  const all = [...bankRows, ...appleRows].sort((a, b) => b.monthly - a.monthly);
+  // Link subscriptions from Gmail. The same charge also comes through the bank, so the bank's copy is dropped.
+  const link = await linkSubscriptionsFor(today);
+  const linkRows = link.map((s) => ({
+    id: `link:${s.owner}:${s.key}`,
+    label: s.name,
+    frequency: linkFrequency(s.months, s.cadence),
+    amount: s.price,
+    monthly: s.months ? s.price / s.months : s.price,
+    lastDate: s.lastCharged as string | null,
+    nextDate: s.next as string | null,
+    category: null as string | null,
+    source: 'link' as const,
+    priceChanged: s.previousPrice !== null,
+    owner: s.owner,
+  }));
+  const bankRows = [...recurring, ...extra]
+    .filter((r) => apple.length === 0 || !APPLE_BILLING.test(r.label))
+    .filter((r) => !link.some((s) => s.key !== 'unassociated' && sameMerchant(r.label, s.name)));
+  const all = [...bankRows, ...appleRows, ...linkRows].sort((a, b) => b.monthly - a.monthly);
   const horizon = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
 
   // Credit cards with their statement details (when the bank shares them).
@@ -107,10 +126,19 @@ export async function getSummary() {
     if (!prev || String(l.updated_at) > String(prev.updated_at)) liabBy.set(kept, l);
   }
   const num = (v: unknown) => (v == null ? null : Number(v));
+  // 0% end dates you typed in. A date set on the other login's copy of a shared card still counts.
+  const promoRows = (await sql.query('SELECT account_id, ends FROM card_promos')).rows;
+  const promoBy = new Map<string, string>();
+  for (const p of promoRows) promoBy.set(dup.get(p.account_id) ?? p.account_id, p.ends);
+
   const cards = accounts
     .filter((a) => a.type === 'credit')
     .map((a) => {
       const l = liabBy.get(a.id);
+      const aprs = cleanAprsStored(l?.aprs);
+      const zero = zeroAprs(aprs);
+      const zeroBalance = zero.some((z) => z.balance !== null) ? zero.reduce((n, z) => n + (z.balance ?? 0), 0) : null;
+      const ends = promoBy.get(a.id) ?? null;
       const details = l
         ? {
             next_due: l.next_due as string | null, minimum: num(l.minimum), statement_balance: num(l.statement_balance),
@@ -119,7 +147,13 @@ export async function getSummary() {
           }
         : null;
       const state = cardState(details, today);
-      return { ...a, details, state, daysLeft: details?.next_due ? daysUntil(details.next_due, today) : null };
+      return {
+        ...a, details, state, daysLeft: details?.next_due ? daysUntil(details.next_due, today) : null,
+        aprs,
+        zeroAprs: zero,
+        interestLastStatement: l ? interestCharged(aprs) : null,
+        promo: ends ? promoPlan(ends, today, zeroBalance, a.current) : null,
+      };
     });
 
   const upcoming = all
@@ -139,6 +173,11 @@ export async function getSummary() {
       minimum: c.details!.minimum ?? 0,
       statement: c.details!.statement_balance,
     }));
+  // 0% offers ending within 60 days (or already ended and still owing).
+  const promoNotices = cards
+    .filter((c) => c.promo && c.promo.level !== 'ok' && c.promo.balance > 0)
+    .map((c) => ({ accountId: c.id, name: `${c.name}${c.mask ? ' ··' + c.mask : ''}`, ...c.promo! }))
+    .sort((a, b) => a.daysLeft - b.daysLeft);
   const cardNotices = cards
     .filter((c) => needsAttention(c.state))
     .map((c) => ({ accountId: c.id, name: `${c.name}${c.mask ? ' ··' + c.mask : ''}`, state: c.state, minimum: c.details?.minimum ?? null, due: c.details?.next_due ?? null, daysLeft: c.daysLeft }));
@@ -159,11 +198,21 @@ export async function getSummary() {
     cards,
     cardNotices,
     cardDue,
+    promoNotices,
     appleCount: apple.length,
+    linkCount: link.length,
     totals: { assets, debts, net: assets - debts, monthlyRecurring: all.reduce((n, r) => n + r.monthly, 0) },
     recurring: all,
     upcoming,
   };
+}
+
+/** Rows read back from the database are already cleaned, but older rows may hold nothing. */
+function cleanAprsStored(v: unknown) {
+  const raw = typeof v === 'string' ? JSON.parse(v) : v;
+  if (!Array.isArray(raw)) return [];
+  // stored shape is { type, pct, balance, interest }; reuse the same checks by mapping to Plaid's names
+  return cleanAprs(raw.map((a: any) => ({ apr_type: a?.type, apr_percentage: a?.pct, balance_subject_to_apr: a?.balance, interest_charge_amount: a?.interest })));
 }
 
 export type Summary = Awaited<ReturnType<typeof getSummary>>;

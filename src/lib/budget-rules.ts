@@ -122,14 +122,15 @@ export function limitFor(line: Pick<Line, 'amount' | 'frequency'>): number {
 
 /**
  * "Over" once spending passes the limit. "Low" when $50 or less is left and at least half is used
- * (so a $40 budget does not nag from day one).
+ * (so a $40 budget does not nag from day one). A fixed bill paid exactly in full is done, not low.
  */
-export function noticeFor(line: Pick<Line, 'id' | 'name' | 'amount' | 'frequency' | 'direction'>, spent: number, lowLeft = LOW_LEFT): Notice | null {
+export function noticeFor(line: Pick<Line, 'id' | 'name' | 'amount' | 'frequency' | 'direction'> & Partial<Pick<Line, 'kind'>>, spent: number, lowLeft = LOW_LEFT): Notice | null {
   if (line.direction !== 'out') return null;
   const limit = limitFor(line);
   if (limit <= 0 || spent <= 0) return null;
   const left = Math.round((limit - spent) * 100) / 100;
   if (left < 0) return { lineId: line.id, name: line.name, level: 'over', left, limit };
+  if (line.kind === 'fixed' && left === 0) return null;
   if (left <= lowLeft && spent >= limit / 2) return { lineId: line.id, name: line.name, level: 'low', left, limit };
   return null;
 }

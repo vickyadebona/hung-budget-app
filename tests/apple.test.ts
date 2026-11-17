@@ -112,3 +112,31 @@ test('card status: paid, due soon, overdue, nothing owed', async () => {
   assert.equal(cardState({ ...base, is_overdue: true }, '2026-11-01'), 'overdue');
   assert.equal(cardState(null, '2026-11-01'), 'unknown');
 });
+
+test('APRs: keeps valid rates, spots 0% balances, totals interest', async () => {
+  const { cleanAprs, zeroAprs, interestCharged } = await import('../src/lib/cards.ts');
+  const aprs = cleanAprs([
+    { apr_percentage: 24.99, apr_type: 'purchase_apr', balance_subject_to_apr: 300, interest_charge_amount: 6.2 },
+    { apr_percentage: 0, apr_type: 'balance_transfer_apr', balance_subject_to_apr: 2400, interest_charge_amount: 0 },
+    { apr_percentage: 0, apr_type: 'cash_apr', balance_subject_to_apr: 0, interest_charge_amount: 0 }, // 0% but nothing at that rate
+    { apr_percentage: 'x', apr_type: 'special' }, // malformed
+    { apr_percentage: 5, apr_type: 'mystery' },
+  ]);
+  assert.equal(aprs.length, 3);
+  assert.deepEqual(zeroAprs(aprs).map((a) => [a.type, a.balance]), [['balance_transfer_apr', 2400]]);
+  assert.equal(interestCharged(aprs), 6.2);
+  assert.deepEqual(cleanAprs(null), []);
+});
+
+test('0% offer plan: monthly amount to clear it, and how urgent it is', async () => {
+  const { promoPlan } = await import('../src/lib/cards.ts');
+  const far = promoPlan('2027-11-13', '2026-11-13', 2400, 2700);
+  assert.deepEqual([far.level, far.paymentsLeft, far.monthly, far.balance], ['ok', 11, 219, 2400]); // uses the 0% balance, not the whole card
+  assert.equal(promoPlan('2027-01-10', '2026-11-13', 1000, null).level, 'soon');
+  const urgent = promoPlan('2026-12-01', '2026-11-13', 1000, null);
+  assert.deepEqual([urgent.level, urgent.paymentsLeft, urgent.monthly], ['urgent', 1, 1000]);
+  const ended = promoPlan('2026-11-01', '2026-11-13', 1000, null);
+  assert.deepEqual([ended.level, ended.monthly], ['ended', null]);
+  assert.equal(promoPlan('2027-06-01', '2026-11-13', null, 500).balance, 500); // falls back to the card balance
+  assert.equal(promoPlan('2027-06-01', '2026-11-13', null, -20).monthly, null); // nothing owed
+});

@@ -46,3 +46,65 @@ export function appleFrequency(months: number | null): string {
   if (months === 12) return 'yearly';
   return 'repeats';
 }
+
+/* ---------- interest rates (APRs) ---------- */
+
+export type AprType = 'purchase_apr' | 'balance_transfer_apr' | 'cash_apr' | 'special';
+export interface Apr {
+  type: AprType;
+  pct: number; // 0 means a 0% rate
+  balance: number | null; // how much of the balance is at this rate
+  interest: number | null; // interest charged at this rate on the last statement
+}
+
+const APR_TYPES: AprType[] = ['purchase_apr', 'balance_transfer_apr', 'cash_apr', 'special'];
+export const APR_LABEL: Record<AprType, string> = {
+  purchase_apr: 'purchases', balance_transfer_apr: 'balance transfer', cash_apr: 'cash advances', special: 'promotional',
+};
+
+/** Plaid's aprs list, kept to the four fields that matter, with anything malformed dropped. */
+export function cleanAprs(raw: unknown): Apr[] {
+  if (!Array.isArray(raw)) return [];
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  return raw
+    .filter((a): a is Record<string, unknown> => !!a && typeof a === 'object')
+    .map((a) => ({ type: a.apr_type as AprType, pct: num(a.apr_percentage), balance: num(a.balance_subject_to_apr), interest: num(a.interest_charge_amount) }))
+    .filter((a): a is Apr => APR_TYPES.includes(a.type) && a.pct !== null);
+}
+
+/** Rates at 0% that actually hold some balance (a 0% cash rate on an empty balance is not worth showing). */
+export function zeroAprs(aprs: Apr[]): Apr[] {
+  return aprs.filter((a) => a.pct === 0 && (a.balance === null || a.balance > 0));
+}
+
+export function interestCharged(aprs: Apr[]): number {
+  return aprs.reduce((n, a) => n + (a.interest ?? 0), 0);
+}
+
+/* ---------- 0% offers ending ---------- */
+
+export type PromoLevel = 'ok' | 'soon' | 'urgent' | 'ended';
+export const PROMO_SOON_DAYS = 60;
+export const PROMO_URGENT_DAYS = 30;
+
+export interface PromoPlan {
+  ends: string;
+  daysLeft: number;
+  level: PromoLevel;
+  balance: number; // what needs paying off before the rate goes up
+  paymentsLeft: number; // monthly payments still possible before it ends
+  monthly: number | null; // per month to clear it in time; null once it has ended or nothing is owed
+}
+
+/**
+ * How to clear a 0% balance before the offer ends. Uses the balance Plaid reports at 0% when it has one,
+ * otherwise the card's whole balance. Rounded up to the dollar so it is never short.
+ */
+export function promoPlan(ends: string, today: string, zeroBalance: number | null, cardBalance: number | null): PromoPlan {
+  const daysLeft = daysUntil(ends, today);
+  const balance = Math.max(0, zeroBalance ?? cardBalance ?? 0);
+  const paymentsLeft = daysLeft <= 0 ? 0 : Math.max(1, Math.floor(daysLeft / 30.44));
+  const level: PromoLevel = daysLeft < 0 ? 'ended' : daysLeft <= PROMO_URGENT_DAYS ? 'urgent' : daysLeft <= PROMO_SOON_DAYS ? 'soon' : 'ok';
+  const monthly = daysLeft < 0 || balance <= 0 ? null : Math.ceil(balance / paymentsLeft);
+  return { ends, daysLeft, level, balance, paymentsLeft, monthly };
+}

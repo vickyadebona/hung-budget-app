@@ -2,9 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Landmark, Plus, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type { Summary } from '@/lib/summary';
+import { APR_LABEL, type AprType } from '@/lib/cards';
 import type { Notice } from '@/lib/budget-rules';
 import { Notices } from './Budget';
 import { api, money } from './shared';
+import { Empty, PageHeader, Section } from './Section';
 
 declare global {
   interface Window {
@@ -13,10 +15,6 @@ declare global {
 }
 
 const day = (d: string) => new Date(d + 'T12:00:00').toLocaleDateString('en-US', d.slice(0, 4) === String(new Date().getFullYear()) ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' });
-const FREQ: Record<string, string> = {
-  WEEKLY: 'weekly', BIWEEKLY: 'every 2 weeks', SEMI_MONTHLY: 'twice a month', MONTHLY: 'monthly', ANNUALLY: 'yearly',
-  weekly: 'weekly', biweekly: 'every 2 weeks', monthly: 'monthly', quarterly: 'every 3 months', yearly: 'yearly', 'every-6-months': 'every 6 months',
-};
 const LINK_KEY = 'bud_link_token';
 
 // Kept in localStorage (not sessionStorage) because a bank's own app can send you back in a new tab.
@@ -46,17 +44,6 @@ function loadPlaid(): Promise<void> {
   });
 }
 
-function Section({ title, aside, children }: { title: string; aside?: React.ReactNode; children: React.ReactNode }) {
-  return (
-    <section className="rounded-2xl border bg-card p-4 text-card-foreground">
-      <div className="mb-3 flex items-baseline justify-between gap-3">
-        <h2 className="text-sm font-semibold">{title}</h2>
-        {aside && <span className="text-sm text-muted-foreground tabular-nums">{aside}</span>}
-      </div>
-      {children}
-    </section>
-  );
-}
 
 type Account = Summary['accounts'][number];
 type Card = Summary['cards'][number];
@@ -92,12 +79,67 @@ function cardLine(c: Card): string {
   }
 }
 
-const Empty = ({ children }: { children: React.ReactNode }) => <p className="text-sm text-muted-foreground">{children}</p>;
+/** "0% on $2,400 (balance transfer) · 24.99% on purchases · $6.20 interest last statement" */
+function rateLine(c: Card): string {
+  const parts: string[] = [];
+  for (const a of c.zeroAprs) parts.push(`0% on ${a.balance != null ? money(a.balance) : 'part of the balance'} (${APR_LABEL[a.type as AprType]})`);
+  for (const a of c.aprs) {
+    if (a.pct === 0) continue;
+    if (a.type === 'cash_apr' && !(a.balance && a.balance > 0)) continue; // cash rate only matters if there is a cash balance
+    parts.push(`${a.pct}% on ${APR_LABEL[a.type as AprType]}`);
+  }
+  if (c.interestLastStatement && c.interestLastStatement > 0) parts.push(`${money(c.interestLastStatement)} interest last statement`);
+  return parts.join(' · ');
+}
 
-export default function Dashboard({ initial, userName, userEmail, notices = [], onOpenBudget }: {
-  initial: Summary; userName: string; userEmail: string; notices?: Notice[]; onOpenBudget?: () => void;
+const field = 'h-8 rounded-lg border border-input bg-background px-2 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50';
+
+/** Shows when a 0% offer ends and what to pay each month to clear it; lets you set or change the date. */
+function PromoRow({ card, busy, saving, onSave }: { card: Card; busy: boolean; saving: boolean; onSave: (ends: string | null) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [date, setDate] = useState(card.promo?.ends ?? '');
+  const p = card.promo;
+  const tone = !p ? '' : p.level === 'ended' || p.level === 'urgent' ? 'text-destructive' : p.level === 'soon' ? 'font-medium text-warn-foreground' : 'text-muted-foreground';
+  const save = (v: string | null) => { onSave(v); setEditing(false); };
+
+  if (editing) {
+    return (
+      <form className="mt-1.5 flex flex-wrap items-center gap-2" onSubmit={(e) => { e.preventDefault(); if (date) save(date); }}>
+        <label className="text-xs text-muted-foreground" htmlFor={`promo-${card.id}`}>0% offer ends</label>
+        <input id={`promo-${card.id}`} type="date" className={field} value={date} onChange={(e) => setDate(e.target.value)} required />
+        <Button size="sm" type="submit" disabled={busy || !date} loading={saving}>Save</Button>
+        <Button size="sm" type="button" variant="ghost" onClick={() => { setEditing(false); setDate(p?.ends ?? ''); }}>Cancel</Button>
+        {p && <Button size="sm" type="button" variant="ghost" className="text-destructive" disabled={busy} onClick={() => save(null)}>Remove</Button>}
+      </form>
+    );
+  }
+  if (!p) {
+    // Worth offering when Plaid shows a 0% rate, or when the bank shares no rates at all (it may still have one).
+    if (card.zeroAprs.length === 0 && card.aprs.length > 0) return null;
+    return (
+      <button type="button" className="mt-0.5 text-xs text-primary underline-offset-4 hover:underline" onClick={() => setEditing(true)}>
+        {card.zeroAprs.length > 0 ? 'Add when the 0% offer ends' : 'Have a 0% offer? Add its end date'}
+      </button>
+    );
+  }
+  return (
+    <p className={`text-xs ${tone}`}>
+      {p.level === 'ended'
+        ? `0% ended ${longDay(p.ends)}${p.balance > 0 ? ` · ${money(p.balance)} may now be charged interest` : ''}`
+        : `0% ends ${longDay(p.ends)}${inDays(p.daysLeft)}${p.monthly != null ? ` · pay ${money(p.monthly)}/mo to clear ${money(p.balance)}` : ''}`}
+      {' '}
+      <button type="button" className="text-primary underline-offset-4 hover:underline" onClick={() => setEditing(true)}>Change</button>
+    </p>
+  );
+}
+
+
+export default function Dashboard({ initial, userName, userEmail, demo = false, notices = [], onOpenBudget, onOpenRecurring, onSummary }: {
+  initial: Summary; userName: string; userEmail: string; demo?: boolean; notices?: Notice[];
+  onOpenBudget?: () => void; onOpenRecurring?: () => void; onSummary?: (s: Summary) => void;
 }) {
   const [data, setData] = useState(initial);
+  useEffect(() => { onSummary?.(data); }, [data, onSummary]); // the Recurring page shows the same, freshest data
   const [busy, setBusy] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null); // which button started the current action
   const [error, setError] = useState<string | null>(null);
@@ -175,25 +217,19 @@ export default function Dashboard({ initial, userName, userEmail, notices = [], 
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-4 pb-6">
-      <header className="flex items-center justify-between gap-3 pt-2">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">Budget</h1>
-          <p className="text-sm text-muted-foreground">Hi {userName.split(' ')[0]}</p>
-        </div>
-        <div className="flex items-center gap-2">
+      <PageHeader title="Overview" subtitle={`Hi ${userName.split(' ')[0]}`}>
           <Button variant="outline" size="lg" disabled={!!busy || data.items.length === 0} loading={busyKey === 'refresh'}
             onClick={() => run('Refreshing', async () => { await api('/api/sync', {}); await refresh(); }, 'refresh')}>
             <RefreshCw /> Refresh
           </Button>
-        </div>
-      </header>
+      </PageHeader>
 
-      {!real && (
+      {!real && !demo && (
         <p className="rounded-xl bg-warn px-3 py-2 text-sm text-warn-foreground">
           Practice mode: these are Plaid's fake banks, so nothing here is your real money.
         </p>
       )}
-      {!data.configured && (
+      {!data.configured && !demo && (
         <p className="rounded-xl border px-3 py-2 text-sm">
           Plaid keys are missing. Add <code>PLAID_CLIENT_ID</code> and <code>PLAID_SECRET</code> to <code>.env</code>, then restart.
         </p>
@@ -212,6 +248,18 @@ export default function Dashboard({ initial, userName, userEmail, notices = [], 
           ))}
         </ul>
       )}
+      {data.promoNotices.length > 0 && (
+        <ul className="grid gap-2" aria-label="0% offers ending">
+          {data.promoNotices.map((n) => (
+            <li key={n.accountId} className={`rounded-xl px-3 py-2 text-sm ${n.level === 'soon' ? 'bg-warn text-warn-foreground' : 'bg-destructive/10 text-destructive'}`}>
+              <span className="font-medium">{n.name}</span>
+              {n.level === 'ended'
+                ? `: 0% offer ended ${longDay(n.ends)}, ${money(n.balance)} may now be charged interest`
+                : `: 0% ends ${longDay(n.ends)}${inDays(n.daysLeft)}. Pay ${money(n.monthly ?? n.balance)}/mo to clear ${money(n.balance)}`}
+            </li>
+          ))}
+        </ul>
+      )}
       <Notices notices={notices} onOpen={onOpenBudget} />
 
       <div className="grid grid-cols-2 gap-3">
@@ -220,11 +268,12 @@ export default function Dashboard({ initial, userName, userEmail, notices = [], 
           <p className="mt-1 text-2xl font-semibold tabular-nums">{money(data.totals.net)}</p>
           <p className="mt-1 text-xs text-muted-foreground tabular-nums">{money(data.totals.assets)} cash · {money(data.totals.debts)} owed</p>
         </div>
-        <div className="rounded-2xl border bg-card p-4">
+        <button type="button" onClick={onOpenRecurring}
+          className="rounded-2xl border bg-card p-4 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
           <p className="text-xs text-muted-foreground">Recurring per month</p>
           <p className="mt-1 text-2xl font-semibold tabular-nums">{money(data.totals.monthlyRecurring)}</p>
-          <p className="mt-1 text-xs text-muted-foreground">{data.recurring.length} charges found</p>
-        </div>
+          <p className="mt-1 text-xs text-primary">{data.recurring.length} charges · see all</p>
+        </button>
       </div>
 
       {data.cardDue.length > 0 && (
@@ -264,28 +313,6 @@ export default function Dashboard({ initial, userName, userEmail, notices = [], 
         )}
       </Section>
 
-      <Section title="Recurring charges" aside={data.recurring.length ? `${money(data.totals.monthlyRecurring * 12)} a year` : undefined}>
-        {data.recurring.length === 0 ? <Empty>Link a bank and recurring charges will show up here.</Empty> : (
-          <ul className="divide-y">
-            {data.recurring.map((r) => (
-              <li key={r.id} className="flex items-center justify-between gap-3 py-2.5 text-sm">
-                <div className="min-w-0 flex-1">
-                  <p className="truncate font-medium">{r.label}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {FREQ[r.frequency] ?? 'repeats'}
-                    {r.source === 'found' && ' · spotted by our own check'}
-                    {r.source === 'apple' && ' · from Apple receipts'}
-                    {'trial' in r && r.trial && ' · free trial'}
-                    {r.priceChanged && ' · price changed'}
-                  </p>
-                </div>
-                <span className="tabular-nums">{money(r.amount)}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Section>
-
       <Section title="Bank balances" aside={data.bank.length ? money(total(data.bank)) : undefined}>
         {data.bank.length === 0 ? <Empty>No checking or savings accounts linked yet.</Empty> : (
           <AccountList accounts={data.bank} bankName={bankName} />
@@ -298,13 +325,21 @@ export default function Dashboard({ initial, userName, userEmail, notices = [], 
             {data.cards.map((c) => (
               <li key={c.id} className="py-2.5 text-sm">
                 <div className="flex items-baseline justify-between gap-3">
-                  <span className="min-w-0 flex-1 truncate font-medium">{c.name}{c.mask && <span className="font-normal text-muted-foreground"> ··{c.mask}</span>}</span>
+                  <span className="flex min-w-0 flex-1 items-baseline gap-2">
+                    <span className="truncate font-medium">{c.name}{c.mask && <span className="font-normal text-muted-foreground"> ··{c.mask}</span>}</span>
+                    {(c.zeroAprs.length > 0 || c.promo) && (
+                      <span className="shrink-0 rounded-full bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary">0% APR</span>
+                    )}
+                  </span>
                   <span className="shrink-0 tabular-nums">{c.current == null ? '—' : money(c.current)}</span>
                 </div>
                 <p className={`text-xs ${c.state === 'overdue' ? 'text-destructive' : c.state === 'due-soon' ? 'font-medium text-warn-foreground' : 'text-muted-foreground'}`}>
                   {cardLine(c)}
                   <span className="text-muted-foreground"> · {bankName(c.item_id)}{c.shared && ' · shared'}</span>
                 </p>
+                {rateLine(c) && <p className="text-xs text-muted-foreground">{rateLine(c)}</p>}
+                <PromoRow card={c} busy={!!busy} saving={busyKey === `promo:${c.id}`}
+                  onSave={(ends) => run('Saving', async () => { await api('/api/cards/promo', { accountId: c.id, ends }); await refresh(); }, `promo:${c.id}`)} />
               </li>
             ))}
           </ul>
@@ -330,7 +365,7 @@ export default function Dashboard({ initial, userName, userEmail, notices = [], 
         </Section>
       )}
 
-      <Section title="Linked banks" aside={real ? `${slotsLeft} of ${data.slots.cap} logins left` : undefined}>
+      <Section title="Linked banks" aside={real && !demo ? `${slotsLeft} of ${data.slots.cap} logins left` : undefined}>
         {data.items.length === 0 && <Empty>No banks linked yet.</Empty>}
         <ul className="divide-y">
           {data.items.map((it) => (
@@ -350,7 +385,7 @@ export default function Dashboard({ initial, userName, userEmail, notices = [], 
           ))}
         </ul>
 
-        <div className="mt-4 grid gap-2">
+        {!demo && <div className="mt-4 grid gap-2">
           {real && confirming ? (
             <div className="rounded-xl border p-3 text-sm">
               <p>This uses 1 of your {slotsLeft} remaining bank logins, and it can't be undone.
@@ -372,7 +407,7 @@ export default function Dashboard({ initial, userName, userEmail, notices = [], 
               Add the practice bank in one tap
             </Button>
           )}
-        </div>
+        </div>}
       </Section>
     </div>
   );

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs';
 import path from 'node:path';
 import { env } from './auth';
@@ -108,9 +109,52 @@ export const SCHEMA = [
   )`,
   // 'ok', 'consent' (needs the owner to allow it), 'unsupported', or null (not tried yet).
   `ALTER TABLE items ADD COLUMN IF NOT EXISTS liabilities text`,
+  // Each card's interest rates from Plaid: [{ type, pct, balance, interest }].
+  `ALTER TABLE card_liabilities ADD COLUMN IF NOT EXISTS aprs jsonb`,
+  // What Link (Stripe's wallet) emails say: charges, renewals and payments coming up. One row per item in an email.
+  `CREATE TABLE IF NOT EXISTS link_events (
+    id          text PRIMARY KEY,
+    owner_email text NOT NULL,
+    message_id  text NOT NULL,
+    kind        text NOT NULL,
+    name        text NOT NULL,
+    amount      double precision NOT NULL,
+    date        text NOT NULL,
+    renewed     boolean NOT NULL DEFAULT false,
+    months      double precision,
+    cadence     text
+  )`,
+  `CREATE TABLE IF NOT EXISTS link_emails (message_id text PRIMARY KEY, owner_email text NOT NULL, received text NOT NULL, ingested_at text NOT NULL)`,
+  // A 0% offer's end date, typed in by you (Plaid does not provide it).
+  `CREATE TABLE IF NOT EXISTS card_promos (
+    account_id text PRIMARY KEY,
+    ends       text NOT NULL,
+    set_by     text NOT NULL,
+    updated_at text NOT NULL
+  )`,
 ];
 
 let ready: Promise<Sql> | null = null;
+
+/* ---------- demo mode ----------
+ * A demo sign-in runs every request inside demoScope. db() then hands back a separate in-memory database
+ * filled with made-up data, so nothing a demo viewer sees or does can reach the real one.
+ */
+const demoScope = new AsyncLocalStorage<true>();
+let demoReady: Promise<Sql> | null = null;
+
+export const inDemo = (): boolean => demoScope.getStore() === true;
+export const runAsDemo = <T>(fn: () => T): T => demoScope.run(true, fn);
+
+async function connectDemo(): Promise<Sql> {
+  const { PGlite } = await import('@electric-sql/pglite');
+  const pg = new PGlite(); // memory only: never written to disk, gone when the server restarts
+  const sql: Sql = { query: (text, params) => pg.query(text, (params ?? []) as any[]) as any };
+  for (const stmt of SCHEMA) await sql.query(stmt);
+  const { seedDemo } = await import('./demo');
+  await seedDemo(sql);
+  return sql;
+}
 
 async function connect(): Promise<Sql> {
   const url = env('DATABASE_URL');
@@ -132,6 +176,10 @@ async function connect(): Promise<Sql> {
 }
 
 export function db(): Promise<Sql> {
+  if (inDemo()) {
+    if (!demoReady) demoReady = connectDemo().catch((e) => { demoReady = null; throw e; });
+    return demoReady;
+  }
   if (!ready) ready = connect().catch((e) => { ready = null; throw e; });
   return ready;
 }

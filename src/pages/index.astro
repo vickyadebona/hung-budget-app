@@ -7,5 +7,5 @@ import App from '@/components/App.tsx';
 const month = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit' }).format(new Date()).slice(0, 7);
 ---
 <Base title="Budget">
-  <App client:load month={month} userName={Astro.locals.user.name} userEmail={Astro.locals.user.email} />
+  <App client:load month={month} userName={Astro.locals.user.name} userEmail={Astro.locals.user.email} demo={Astro.locals.user.demo === true} />
 </Base>

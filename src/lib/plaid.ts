@@ -1,8 +1,9 @@
 import crypto from 'node:crypto';
 import { env } from './auth';
-import { db, getMeta, setMeta, type Sql } from './db';
+import { db, getMeta, inDemo, setMeta, type Sql } from './db';
 import { decrypt, encrypt, keyFromHex } from './secrets';
 import { deleteTransactions, upsertTransactions } from './txn-store';
+import { cleanAprs } from './cards';
 
 /** Talks to Plaid's REST API directly (plain JSON over HTTPS), so there is no SDK to keep up to date. */
 
@@ -32,6 +33,7 @@ export function itemCap(): number {
 }
 
 async function plaid<T = any>(path: string, body: Record<string, unknown>): Promise<T> {
+  if (inDemo()) throw new PlaidError('This is the demo, with made-up data. Sign in to link a bank.', 'DEMO', 400);
   if (!plaidConfigured()) throw new PlaidError('Plaid keys are not set. Add PLAID_CLIENT_ID and PLAID_SECRET to .env.', 'NOT_CONFIGURED', 500);
   const res = await fetch(`https://${plaidEnv()}.plaid.com${path}`, {
     method: 'POST',
@@ -258,13 +260,14 @@ async function syncLiabilities(sql: Sql, itemId: string, token: string, status: 
   for (const c of r.liabilities?.credit ?? []) {
     if (!c?.account_id) continue;
     await sql.query(
-      `INSERT INTO card_liabilities (account_id, item_id, next_due, minimum, statement_balance, statement_date, last_payment, last_payment_date, is_overdue, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      `INSERT INTO card_liabilities (account_id, item_id, next_due, minimum, statement_balance, statement_date, last_payment, last_payment_date, is_overdue, updated_at, aprs)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)
        ON CONFLICT (account_id) DO UPDATE SET next_due = EXCLUDED.next_due, minimum = EXCLUDED.minimum, statement_balance = EXCLUDED.statement_balance,
          statement_date = EXCLUDED.statement_date, last_payment = EXCLUDED.last_payment, last_payment_date = EXCLUDED.last_payment_date,
-         is_overdue = EXCLUDED.is_overdue, updated_at = EXCLUDED.updated_at`,
+         is_overdue = EXCLUDED.is_overdue, updated_at = EXCLUDED.updated_at, aprs = EXCLUDED.aprs`,
       [c.account_id, itemId, c.next_payment_due_date ?? null, c.minimum_payment_amount ?? null, c.last_statement_balance ?? null,
-        c.last_statement_issue_date ?? null, c.last_payment_amount ?? null, c.last_payment_date ?? null, c.is_overdue === true, now],
+        c.last_statement_issue_date ?? null, c.last_payment_amount ?? null, c.last_payment_date ?? null, c.is_overdue === true, now,
+        JSON.stringify(cleanAprs(c.aprs))],
     );
   }
   await sql.query(`UPDATE items SET liabilities = 'ok' WHERE id = $1`, [itemId]);
@@ -279,6 +282,11 @@ export async function liabilitiesAllowed(itemId: string): Promise<void> {
 /** Pull the latest balances, transactions and recurring charges for every linked bank. One bank failing never blocks the rest. */
 export async function syncAll(): Promise<SyncResult[]> {
   const sql = await db();
+  if (inDemo()) {
+    // Nothing to fetch: just make the demo look freshly updated.
+    await sql.query('UPDATE items SET last_synced_at = $1', [new Date().toISOString()]);
+    return [];
+  }
   const items = (await sql.query('SELECT id, institution_name, token_enc, cursor, liabilities FROM items WHERE plaid_env = $1 ORDER BY created_at', [plaidEnv()])).rows;
   const results: SyncResult[] = [];
   for (const it of items) {

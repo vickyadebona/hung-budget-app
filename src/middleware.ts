@@ -1,8 +1,9 @@
 import { defineMiddleware } from 'astro:middleware';
 import { COOKIE, readSession } from './lib/auth';
+import { runAsDemo } from './lib/db';
 
-// These check their own secret instead of a sign-in: /api/cron/ is called by Vercel, /api/apple/ingest by each person's Gmail script.
-const PUBLIC_PREFIXES = ['/auth/', '/favicon', '/_astro/', '/api/cron/', '/api/apple/ingest'];
+// These check their own secret instead of a sign-in: /api/cron/ is called by Vercel, the two ingest routes by each person's Gmail script.
+const PUBLIC_PREFIXES = ['/auth/', '/favicon', '/_astro/', '/api/cron/', '/api/apple/ingest', '/api/link/ingest'];
 
 export const onRequest = defineMiddleware(async (context, next) => {
   const { pathname } = context.url;
@@ -51,5 +52,6 @@ export const onRequest = defineMiddleware(async (context, next) => {
   }
 
   context.locals.user = session;
-  return next();
+  // Demo viewers get the made-up database for the whole request; the real one is out of reach.
+  return session.demo === true ? runAsDemo(() => next()) : next();
 });
