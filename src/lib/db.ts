@@ -178,6 +178,14 @@ export const SCHEMA = [
     price   double precision NOT NULL,
     PRIMARY KEY (link_id, date)
   )`,
+  // Your corrections to the recurring list: cancelled, yearly, monthly, active (not cancelled), not-subscription.
+  `CREATE TABLE IF NOT EXISTS subscription_marks (
+    key        text PRIMARY KEY,
+    mark       text NOT NULL,
+    label      text,
+    set_by     text NOT NULL,
+    updated_at text NOT NULL
+  )`,
 ];
 
 let ready: Promise<Sql> | null = null;

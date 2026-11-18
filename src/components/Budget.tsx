@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Pencil, Plus, Trash2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type { Budget as BudgetData, BudgetLine } from '@/lib/budget';
 import { FREQUENCIES, shiftMonth, type Mapping, type Notice } from '@/lib/budget-rules';
@@ -60,7 +60,12 @@ function Editor({ draft, groups, saving, removing, onSave, onDelete, onCancel }:
   const [sure, setSure] = useState(false);
   const set = (k: keyof Draft) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setD({ ...d, [k]: e.target.value });
   return (
-    <form className="grid gap-3 rounded-xl border bg-background p-3" onSubmit={(e) => { e.preventDefault(); onSave(d); }}>
+    <form className="grid gap-3 rounded-xl border bg-background p-3" onSubmit={(e) => { e.preventDefault(); onSave(d); }}
+      onKeyDown={(e) => { if (e.key === 'Escape') onCancel(); }}>
+      <div className="-mb-1 flex items-center justify-between">
+        <p className="text-sm font-semibold">{d.id ? `Edit ${draft.name}` : 'New budget line'}</p>
+        <Button type="button" variant="ghost" size="icon-sm" aria-label="Close without saving" onClick={onCancel}><X /></Button>
+      </div>
       <label className="grid gap-1 text-xs text-muted-foreground">Name
         <input className={field} value={d.name} onChange={set('name')} required maxLength={80} autoFocus={!d.id} />
       </label>
@@ -107,6 +112,7 @@ export default function Budget({ initial }: { initial: BudgetData }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null); // line id, or 'new'
+  const [deleting, setDeleting] = useState<string | null>(null); // line id waiting for delete confirmation
   const [file, setFile] = useState<{ name: string; text: string } | null>(null);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [restored, setRestored] = useState<number | null>(null);
@@ -134,7 +140,7 @@ export default function Budget({ initial }: { initial: BudgetData }) {
     setEditing(null);
     await load(data.month);
   }, 'save');
-  const remove = (id: string) => run(async () => { await api('/api/budget/line', { id, delete: true }); setEditing(null); await load(data.month); }, 'remove');
+  const remove = (id: string) => run(async () => { await api('/api/budget/line', { id, delete: true }); setEditing(null); setDeleting(null); await load(data.month); }, 'remove');
   const toDraft = (l: BudgetLine): Draft => ({ id: l.id, name: l.name, group: l.group, amount: String(l.amount), frequency: l.frequency, kind: l.kind, direction: l.direction, note: l.note });
 
   return (
@@ -223,19 +229,30 @@ export default function Budget({ initial }: { initial: BudgetData }) {
                 {editing === l.id ? (
                   <Editor draft={toDraft(l)} groups={groupNames} saving={busyKey === 'save'} removing={busyKey === 'remove'} onSave={save} onDelete={() => remove(l.id)} onCancel={() => setEditing(null)} />
                 ) : (
-                  <button type="button" className="block w-full text-left" onClick={() => setEditing(l.id)} aria-label={`Edit ${l.name}`}>
-                    <span className="flex items-baseline justify-between gap-3 text-sm">
+                  <div>
+                    <div className="flex items-center gap-2 text-sm">
                       <span className="min-w-0 flex-1 truncate font-medium">{l.name}</span>
                       <span className={`shrink-0 tabular-nums ${l.notice?.level === 'over' ? 'text-destructive' : ''}`}>
                         {l.direction === 'in' ? money(l.amount) : `${money(l.spent)} / ${money(l.limit)}`}
                       </span>
-                    </span>
+                      <Button variant="ghost" size="icon-sm" aria-label={`Edit ${l.name}`} disabled={busy}
+                        onClick={() => { setDeleting(null); setEditing(l.id); }}><Pencil /></Button>
+                      <Button variant="ghost" size="icon-sm" aria-label={`Delete ${l.name}`} disabled={busy} className="text-muted-foreground hover:text-destructive"
+                        onClick={() => setDeleting(deleting === l.id ? null : l.id)}><Trash2 /></Button>
+                    </div>
                     <span className="block truncate text-xs text-muted-foreground">
                       {FREQ_LABEL[l.frequency]}{l.direction === 'out' && (l.kind === 'fixed' ? ' · fixed' : ' · flexible')}
                       {l.frequency !== 'monthly' && ` · ${money(l.monthly)} a month`}{l.note && ` · ${l.note}`}
                     </span>
                     {l.direction === 'out' && <Bar spent={l.spent} limit={l.limit} />}
-                  </button>
+                    {deleting === l.id && (
+                      <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg bg-destructive/10 px-3 py-2 text-sm" role="alert">
+                        <span className="flex-1">Delete {l.name}? Spending sorted into it will show under Needs a category.</span>
+                        <Button size="sm" variant="destructive" loading={busyKey === 'remove'} onClick={() => remove(l.id)}>Delete</Button>
+                        <Button size="sm" variant="ghost" disabled={busyKey === 'remove'} onClick={() => setDeleting(null)}>Keep it</Button>
+                      </div>
+                    )}
+                  </div>
                 )}
               </li>
             ))}
