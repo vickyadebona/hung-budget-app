@@ -2,8 +2,8 @@ import { defineMiddleware } from 'astro:middleware';
 import { COOKIE, readSession } from './lib/auth';
 import { runAsDemo } from './lib/db';
 
-// These check their own secret instead of a sign-in: /api/cron/ is called by Vercel, the two ingest routes by each person's Gmail script.
-const PUBLIC_PREFIXES = ['/auth/', '/favicon', '/_astro/', '/api/cron/', '/api/apple/ingest', '/api/link/ingest'];
+// These check their own secret instead of a sign-in: /api/cron/ is called by Vercel, the ingest and digest routes by each person's Gmail script.
+const PUBLIC_PREFIXES = ['/auth/', '/favicon', '/_astro/', '/api/cron/', '/api/apple/ingest', '/api/link/ingest', '/api/alerts/digest'];
 
 export const onRequest = defineMiddleware(async (context, next) => {
   const { pathname } = context.url;

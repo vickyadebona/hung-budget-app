@@ -22,6 +22,7 @@ export interface Candidate {
   lastDate: string;
   nextDate: string;
   priceChanged: boolean;
+  previousAmount: number; // the charge before the latest one
 }
 
 const CADENCES: { name: Cadence; days: number; slack: number }[] = [
@@ -109,6 +110,7 @@ export function findRecurring(txns: Txn[], today = toDate(Date.now())): Candidat
       lastDate: last.date,
       nextDate: toDate(next),
       priceChanged: Math.abs(last.amount - prev.amount) > 0.01,
+      previousAmount: prev.amount,
     });
   }
   return out.sort((a, b) => a.nextDate.localeCompare(b.nextDate));

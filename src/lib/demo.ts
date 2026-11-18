@@ -101,7 +101,7 @@ export async function seedDemo(sql: Sql): Promise<void> {
     `INSERT INTO card_deferrals (id, account_id, kind, label, amount, ends, set_by, updated_at) VALUES
        ('demo-def-bt', $1, 'balance-transfer', '', NULL, $2, $5, $6),
        ('demo-def-laptop', $3, 'deferred', 'Laptop', 600, $4, $5, $6)`,
-    [PROMO, shift(t0, 55), REWARDS, shift(t0, 140), DEMO_USER.email, now],
+    [PROMO, shift(t0, 24), REWARDS, shift(t0, 140), DEMO_USER.email, now],
   );
 
   // About four months of everyday life.
@@ -176,6 +176,13 @@ export async function seedDemo(sql: Sql): Promise<void> {
       [`demo-stream-${name.toLowerCase().replace(/[^a-z]+/g, '-')}`, ITEM_A, account, name, frequency.toUpperCase(), amount, lastOnDay(t0, day), nextOnDay(shift(t0, 1), day), category],
     );
   }
+  // Spotify just went up a dollar, and Sam bought a TV two days ago: both show on the Alerts page.
+  await sql.query(`UPDATE recurring SET avg_amount = 10.99, last_amount = 11.99 WHERE id = 'demo-stream-spotify'`);
+  await sql.query(
+    `INSERT INTO transactions (id, item_id, account_id, date, name, merchant_name, amount, category, category_detail, pending, channel)
+     VALUES ('demo-txn-tv', $1, $2, $3, 'Best Buy', 'Best Buy', 649.99, 'GENERAL_MERCHANDISE', 'GENERAL_MERCHANDISE_ELECTRONICS', false, 'in store')`,
+    [ITEM_B, PROMO, shift(t0, -2)],
+  );
 
   // Apple subscriptions, as if read from Gmail receipts.
   for (const [key, name, price] of [['icloud', 'iCloud+ (200 GB)', 2.99], ['appletv', 'Apple TV+', 9.99]] as const) {

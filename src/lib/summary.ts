@@ -58,6 +58,7 @@ export async function getSummary() {
         category: s.category as string | null,
         source: 'plaid' as const,
         priceChanged: s.avg_amount != null && s.last_amount != null && Math.abs(Number(s.last_amount) - Number(s.avg_amount)) > 0.5,
+        previousAmount: s.avg_amount == null ? null : Number(s.avg_amount) as number | null, // Plaid gives the average, not the last-but-one
       };
     })
     .filter((r) => r.amount > 0);
@@ -80,6 +81,7 @@ export async function getSummary() {
       category: null as string | null,
       source: 'found' as const,
       priceChanged: c.priceChanged,
+      previousAmount: c.previousAmount as number | null,
     }));
 
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles' }).format(new Date());
@@ -97,6 +99,7 @@ export async function getSummary() {
     category: null as string | null,
     source: 'apple' as const,
     priceChanged: a.previousPrice !== null && Math.abs(a.previousPrice - a.price) > 0.009,
+    previousAmount: a.previousPrice as number | null,
     owner: a.owner,
     trial: a.trial,
   }));
@@ -113,6 +116,7 @@ export async function getSummary() {
     category: null as string | null,
     source: 'link' as const,
     priceChanged: s.previousPrice !== null,
+    previousAmount: s.previousPrice as number | null,
     owner: s.owner,
   }));
   const isApple = (r: { label: string; description?: string }) => APPLE_BILLING.test(r.label) || APPLE_BILLING.test(r.description ?? '');

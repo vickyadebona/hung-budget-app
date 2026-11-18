@@ -206,6 +206,11 @@ export const SCHEMA = [
     set_by     text NOT NULL,
     updated_at text NOT NULL
   )`,
+  // Alerts: ones either of you dismissed (shared), ones already emailed to each person, and when each
+  // repeating charge was first noticed (so a new subscription can be flagged once).
+  `CREATE TABLE IF NOT EXISTS alert_dismissed (id text PRIMARY KEY, by_email text NOT NULL, at text NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS alert_sent (owner_email text NOT NULL, id text NOT NULL, sent_at text NOT NULL, PRIMARY KEY (owner_email, id))`,
+  `CREATE TABLE IF NOT EXISTS known_recurring (id text PRIMARY KEY, first_seen text NOT NULL)`,
 ];
 
 let ready: Promise<Sql> | null = null;

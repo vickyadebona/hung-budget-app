@@ -1,24 +1,58 @@
+import { env } from './auth';
+
+/** The app's main address (not a one-off deployment link someone happened to open), for the script and emails. */
+export function appUrl(fallback: string): string {
+  for (const v of [env('APP_URL'), env('PLAID_REDIRECT_URI')]) {
+    try {
+      const u = new URL(v);
+      if (u.protocol === 'https:') return u.origin;
+    } catch { /* not set */ }
+  }
+  return fallback;
+}
+
 /**
  * The Google Apps Script each person pastes into script.google.com. It runs inside their own Google account,
  * finds Apple receipt emails and Link (Stripe's wallet) emails, keeps only the parts listing what was bought
  * (never the billing address, card or name), and posts them to the app every 6 hours.
  */
 export function appleScript(appUrl: string, key: string): string {
-  return `// Budget app: send Apple receipts and Link purchase emails from this Gmail to ${appUrl}
+  return `// Budget app: send Apple receipts and Link purchase emails from this Gmail to ${appUrl},
+// and email you the app's alerts (bills due, 0% offers ending, price increases, large purchases) once a day.
 // Runs in your own Google account. It reads only emails from Apple's receipt address and from Link
 // (notifications@link.com), and sends only shop names, prices and dates (not your address, card or name).
+// The alert email goes from you to you; nobody else receives it.
 
 const APP_URL = ${JSON.stringify(appUrl)};
 const KEY = ${JSON.stringify(key)}; // your personal key; keep it private
 
-// Run this once. It asks for permission, sends the last 13 months of emails,
-// then sets itself to check for new ones every 6 hours.
+// Run this once (and again after pasting a new copy). It asks for permission, sends the last 13 months of
+// emails, then checks for new ones every 6 hours and sends you the alert email each morning around 7.
 function setup() {
   ScriptApp.getProjectTriggers()
-    .filter(function (t) { return t.getHandlerFunction() === 'sendAppleReceipts' || t.getHandlerFunction() === 'sendAll'; })
+    .filter(function (t) { return ['sendAppleReceipts', 'sendAll', 'sendAlerts'].indexOf(t.getHandlerFunction()) >= 0; })
     .forEach(function (t) { ScriptApp.deleteTrigger(t); });
   ScriptApp.newTrigger('sendAll').timeBased().everyHours(6).create();
+  ScriptApp.newTrigger('sendAlerts').timeBased().everyDays(1).atHour(7).create();
   sendAll(400);
+}
+
+// Asks the app what's new and, if there is anything, emails it to this Gmail address. Each alert is emailed once.
+function sendAlerts() {
+  var res = UrlFetchApp.fetch(APP_URL + '/api/alerts/digest', {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { 'x-budget-key': KEY },
+    payload: '{}',
+    muteHttpExceptions: true,
+  });
+  if (res.getResponseCode() !== 200) {
+    throw new Error('The budget app answered ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 200));
+  }
+  var mail = JSON.parse(res.getContentText()).email;
+  if (!mail) { Logger.log('No new alerts'); return; }
+  MailApp.sendEmail(Session.getEffectiveUser().getEmail(), mail.subject, mail.text, { name: 'Budget app' });
+  Logger.log('Emailed ' + mail.count + ' alerts');
 }
 
 function sendAll(days) {

@@ -14,11 +14,12 @@ function AppleReceipts() {
 
   return (
     <details className="group" onToggle={(e) => { if ((e.target as HTMLDetailsElement).open && !setup) void load(); }}>
-      <summary className="cursor-pointer text-sm font-medium">Apple and Link subscriptions from Gmail</summary>
+      <summary className="cursor-pointer text-sm font-medium">Gmail: Apple and Link subscriptions, and alert emails</summary>
       <div className="mt-2 grid gap-2 text-sm">
         <p className="text-muted-foreground">
           A small script in your own Google account sends your Apple receipts and Link purchase emails here every 6 hours. It sends only
-          shop names, prices and dates, never your address, card or name. Each of you sets it up from your own sign-in.
+          shop names, prices and dates, never your address, card or name. It also emails you the app's alerts each morning, from your
+          Gmail to your Gmail. Each of you sets it up from your own sign-in. Already set up? Copy it again and run setup once more to get alert emails.
         </p>
         {error && <p className="text-destructive">{error}</p>}
         {setup && (

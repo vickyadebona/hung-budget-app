@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CalendarDays, LayoutDashboard, Menu, PiggyBank, ReceiptText, Repeat, RefreshCw, Settings as SettingsIcon, Target, Gift, X } from 'lucide-react';
+import { Bell, CalendarDays, LayoutDashboard, Menu, PiggyBank, ReceiptText, Repeat, RefreshCw, Settings as SettingsIcon, Target, Gift, X } from 'lucide-react';
 import Dashboard from './Dashboard';
 import Budget from './Budget';
 import Transactions from './Transactions';
@@ -7,6 +7,7 @@ import Recurring from './Recurring';
 import Calendar from './Calendar';
 import Goals from './Goals';
 import Wishlist from './Wishlist';
+import Alerts, { type AlertsData } from './Alerts';
 import Settings from './Settings';
 import PageSkeleton from './Skeleton';
 import { Button } from '@/components/ui/button';
@@ -14,9 +15,10 @@ import { api } from './shared';
 import type { Summary } from '@/lib/summary';
 import type { Budget as BudgetData } from '@/lib/budget';
 
-type Page = 'overview' | 'transactions' | 'recurring' | 'calendar' | 'budget' | 'goals' | 'wishlist';
+type Page = 'overview' | 'alerts' | 'transactions' | 'recurring' | 'calendar' | 'budget' | 'goals' | 'wishlist';
 const PAGES: { id: Page; label: string; Icon: typeof PiggyBank }[] = [
   { id: 'overview', label: 'Overview', Icon: LayoutDashboard },
+  { id: 'alerts', label: 'Alerts', Icon: Bell },
   { id: 'transactions', label: 'Transactions', Icon: ReceiptText },
   { id: 'recurring', label: 'Recurring', Icon: Repeat },
   { id: 'calendar', label: 'Calendar', Icon: CalendarDays },
@@ -41,7 +43,7 @@ function Logo() {
 }
 
 /** The list of pages plus Settings, shared by the desktop sidebar and the phone menu. */
-function NavList({ page, onGo, onSettings, userName }: { page: Page; onGo: (p: Page) => void; onSettings: () => void; userName: string }) {
+function NavList({ page, onGo, onSettings, userName, alertCount }: { page: Page; onGo: (p: Page) => void; onSettings: () => void; userName: string; alertCount: number }) {
   const item = 'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50';
   return (
     <div className="flex h-full flex-col gap-1">
@@ -51,6 +53,11 @@ function NavList({ page, onGo, onSettings, userName }: { page: Page; onGo: (p: P
             <button type="button" onClick={() => onGo(id)} aria-current={page === id ? 'page' : undefined}
               className={`${item} ${page === id ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground' : 'text-sidebar-foreground hover:bg-sidebar-accent/60'}`}>
               <Icon className={`size-4 ${page === id ? 'text-primary' : 'text-muted-foreground'}`} />{label}
+              {id === 'alerts' && alertCount > 0 && (
+                <span className="ml-auto min-w-5 rounded-full bg-destructive px-1.5 text-center text-xs font-semibold text-white tabular-nums">
+                  {alertCount}<span className="sr-only"> new</span>
+                </span>
+              )}
             </button>
           </li>
         ))}
@@ -74,6 +81,7 @@ export default function App({ month, userName, userEmail, demo = false }: { mont
   const [summary, setSummary] = useState<Summary | null>(null); // kept fresh by the Overview's Refresh
   const [error, setError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
+  const [alerts, setAlerts] = useState<AlertsData | null>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
   const drawer = useRef<HTMLDivElement>(null);
 
@@ -89,6 +97,13 @@ export default function App({ month, userName, userEmail, demo = false }: { mont
   }, [month]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Alerts are worked out from the same bank data, so they reload whenever the summary does.
+  const loadAlerts = useCallback(async () => {
+    try { setAlerts(await api<AlertsData>('/api/alerts')); } catch { /* the page shows what it has; the badge just stays */ }
+  }, []);
+  useEffect(() => { if (summary) void loadAlerts(); }, [summary, loadAlerts]);
+  const alertCount = alerts ? alerts.alerts.filter((a) => !a.dismissed && a.level !== 'info').length : 0;
 
   // Pull the latest from the banks, then reload what every page shows. Used by Transactions and Recurring.
   const syncBanks = useCallback(async () => {
@@ -127,7 +142,7 @@ export default function App({ month, userName, userEmail, demo = false }: { mont
     return () => removeEventListener('keydown', onKey);
   }, [menuOpen, closeMenu]);
 
-  const nav = <NavList page={page} onGo={go} onSettings={openSettings} userName={userName} />;
+  const nav = <NavList page={page} onGo={go} onSettings={openSettings} userName={userName} alertCount={alertCount} />;
 
   return (
     <div className="min-h-svh bg-background">
@@ -139,8 +154,9 @@ export default function App({ month, userName, userEmail, demo = false }: { mont
 
       {/* Phone: a top bar with a menu button, and a menu that slides in from the left. */}
       <header className="sticky top-0 z-20 flex items-center gap-3 border-b bg-background/95 px-2 py-2 backdrop-blur md:hidden">
-        <Button ref={menuButton} variant="ghost" size="icon" aria-label="Open menu" aria-expanded={menuOpen} aria-controls="mobile-menu" onClick={() => setMenuOpen(true)}>
+        <Button ref={menuButton} variant="ghost" size="icon" className="relative" aria-label={alertCount ? `Open menu, ${alertCount} alerts` : 'Open menu'} aria-expanded={menuOpen} aria-controls="mobile-menu" onClick={() => setMenuOpen(true)}>
           <Menu />
+          {alertCount > 0 && <span className="absolute top-1.5 right-1.5 size-2 rounded-full bg-destructive" aria-hidden="true" />}
         </Button>
         <Logo />
       </header>
@@ -180,6 +196,9 @@ export default function App({ month, userName, userEmail, demo = false }: { mont
             <div hidden={page !== 'overview'}>
               <Dashboard initial={data.summary} userName={userName} userEmail={userEmail} demo={demo} notices={data.budget.notices}
                 onOpenBudget={() => go('budget')} onOpenRecurring={() => go('recurring')} onSummary={setSummary} latest={summary} />
+            </div>
+            <div hidden={page !== 'alerts'}>
+              <Alerts data={alerts} demo={demo} onReload={loadAlerts} onRefresh={syncBanks} onOpen={go} />
             </div>
             <div hidden={page !== 'transactions'}><Transactions active={page === 'transactions'} onSync={syncBanks} /></div>
             <div hidden={page !== 'recurring'}><Recurring data={summary ?? data.summary} onRefresh={syncBanks} onChanged={reloadSummary} /></div>
