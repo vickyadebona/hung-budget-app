@@ -143,6 +143,8 @@ export async function seedDemo(sql: Sql): Promise<void> {
     }
     if (dow(d) === 6 && rand() < 0.4) out.push(card('Costco', between(110, 240), 'GENERAL_MERCHANDISE', 'GENERAL_MERCHANDISE_SUPERSTORES'));
     if (rand() < 0.45) out.push(card(pick(['Chipotle', 'Sweetgreen', 'Luna Taqueria', 'Pho Saigon', 'Slice House Pizza']), between(11, 58), 'FOOD_AND_DRINK', 'FOOD_AND_DRINK_RESTAURANT'));
+    // Sam's own card.
+    if (rand() < 0.3) out.push({ ...card(pick(['Blue Bottle Coffee', 'Lyft', 'Trader Joe\'s', 'Uniqlo', 'Sweetgreen']), between(6, 70), 'GENERAL_MERCHANDISE', 'GENERAL_MERCHANDISE_CLOTHING_AND_ACCESSORIES'), account: PROMO, item: ITEM_B });
     if (rand() < 0.35) out.push(card(pick(['Blue Bottle Coffee', 'Starbucks']), between(4.5, 12), 'FOOD_AND_DRINK', 'FOOD_AND_DRINK_COFFEE'));
     if ((i + 200) % 9 === 0) out.push(card(pick(['Shell', 'Chevron']), between(42, 61), 'TRANSPORTATION', 'TRANSPORTATION_GAS'));
     if (rand() < 0.12) out.push(card(pick(['Amazon', 'Target']), between(14, 96), 'GENERAL_MERCHANDISE', 'GENERAL_MERCHANDISE_ONLINE_MARKETPLACES', 'online'));
@@ -212,6 +214,8 @@ export async function seedDemo(sql: Sql): Promise<void> {
       [`demo-line-${ord}`, name, grp, direction, amount, frequency, kind, need, JSON.stringify(match), ord++],
     );
   }
+
+  await sql.query(`INSERT INTO people (email, name, updated_at) VALUES ($1, 'Alex Rivera', $3), ($2, 'Sam Rivera', $3)`, [DEMO_USER.email, PARTNER, now]);
 
   // Never load the real paper worksheet (seed/budget.json) into the demo.
   await setMeta(sql, 'budget_seeded', now);

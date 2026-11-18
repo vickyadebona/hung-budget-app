@@ -18,6 +18,7 @@ export default function Transactions({ active, onSync }: { active: boolean; onSy
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  const [person, setPerson] = useState('all'); // 'all', a person's email, 'joint', or a cardholder the bank named
 
   const load = useCallback(async (m: string) => {
     setLoading(true);
@@ -35,11 +36,24 @@ export default function Transactions({ active, onSync }: { active: boolean; onSy
   // Loaded the first time the page is opened, not with the rest of the app.
   useEffect(() => { if (active && !data && !loading && !error) void load(month); }, [active, data, loading, error, load, month]);
 
+  const people = data?.people ?? [];
+  const whose = useMemo(() => {
+    const list = data?.transactions ?? [];
+    return person === 'all' ? list : list.filter((t) => t.who.key === person);
+  }, [data, person]);
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const list = data?.transactions ?? [];
-    return q ? list.filter((t) => `${t.name} ${t.description} ${t.account} ${t.category ?? ''}`.toLowerCase().includes(q)) : list;
-  }, [data, query]);
+    return q ? whose.filter((t) => `${t.name} ${t.description} ${t.account} ${t.category ?? ''} ${t.who.name}`.toLowerCase().includes(q)) : whose;
+  }, [whose, query]);
+  // Totals follow the person picked (not the search), so each person's spending is easy to see.
+  const totals = useMemo(() => {
+    const counted = whose.filter((t) => !t.transfer);
+    return {
+      out: counted.filter((t) => t.amount > 0).reduce((n, t) => n + t.amount, 0),
+      in: counted.filter((t) => t.amount < 0).reduce((n, t) => n - t.amount, 0),
+    };
+  }, [whose]);
+  const personName = people.find((p) => p.key === person)?.name;
   const days = useMemo(() => {
     const groups: { date: string; items: typeof shown }[] = [];
     for (const t of shown) {
@@ -67,6 +81,17 @@ export default function Transactions({ active, onSync }: { active: boolean; onSy
           className="h-10 w-full rounded-lg border border-input bg-background pr-3 pl-9 text-base outline-none focus-visible:ring-3 focus-visible:ring-ring/50" />
       </label>
 
+      {people.length > 1 && (
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Whose transactions">
+          {[{ key: 'all', name: 'Everyone' }, ...people].map((p) => (
+            <button key={p.key} type="button" aria-pressed={person === p.key} onClick={() => setPerson(p.key)}
+              className={`h-8 rounded-full border px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 ${person === p.key ? 'border-primary bg-primary text-primary-foreground' : 'bg-card hover:bg-muted'}`}>
+              {p.name}
+            </button>
+          ))}
+        </div>
+      )}
+
       {error && (
         <div role="alert" className="flex items-center justify-between gap-3 rounded-xl bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}
@@ -78,17 +103,17 @@ export default function Transactions({ active, onSync }: { active: boolean; onSy
         {data && (
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-2xl border bg-card p-4">
-              <p className="text-xs text-muted-foreground">Money out</p>
-              <p className="mt-1 text-2xl font-semibold tabular-nums">{money(data.totals.out)}</p>
+              <p className="text-xs text-muted-foreground">Money out{personName && ` · ${personName}`}</p>
+              <p className="mt-1 text-2xl font-semibold tabular-nums">{money(totals.out)}</p>
             </div>
             <div className="rounded-2xl border bg-card p-4">
-              <p className="text-xs text-muted-foreground">Money in</p>
-              <p className="mt-1 text-2xl font-semibold tabular-nums text-primary">{money(data.totals.in)}</p>
+              <p className="text-xs text-muted-foreground">Money in{personName && ` · ${personName}`}</p>
+              <p className="mt-1 text-2xl font-semibold tabular-nums text-primary">{money(totals.in)}</p>
             </div>
           </div>
         )}
 
-        <Section title={query ? `${shown.length} matching` : `${data?.transactions.length ?? 0} transactions`}>
+        <Section title={query ? `${shown.length} matching` : `${whose.length} transactions`}>
           {!data && !error ? <Empty>Loading…</Empty> : days.length === 0 ? (
             <Empty>{query ? 'Nothing matches that search this month.' : 'No transactions this month.'}</Empty>
           ) : (
@@ -105,7 +130,7 @@ export default function Transactions({ active, onSync }: { active: boolean; onSy
                             {t.pending && <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-normal text-muted-foreground">pending</span>}
                           </p>
                           <p className="truncate text-xs text-muted-foreground">
-                            {t.account}{category(t.category) && ` · ${category(t.category)}`}{t.transfer && ' · between your accounts'}
+                            <span className="font-medium text-foreground/80">{t.who.name}</span> · {t.account}{category(t.category) && ` · ${category(t.category)}`}{t.transfer && ' · between your accounts'}
                           </p>
                         </div>
                         <span className={`shrink-0 tabular-nums ${t.amount < 0 ? 'text-primary' : ''}`}>

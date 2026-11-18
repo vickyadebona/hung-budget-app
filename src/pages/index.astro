@@ -1,6 +1,10 @@
 ---
 import Base from '@/layouts/Base.astro';
 import App from '@/components/App.tsx';
+import { rememberPerson } from '@/lib/db';
+
+// Keep each person's name current, so other pages can say who made a purchase.
+if (!Astro.locals.user.demo) await rememberPerson(Astro.locals.user.email, Astro.locals.user.name);
 
 // "This month" in Los Angeles, so the budget does not roll over at 4pm on the last day.
 // The data itself loads in the browser, so the page (and its loading skeleton) shows immediately.

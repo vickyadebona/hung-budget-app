@@ -1,5 +1,6 @@
 import type { APIRoute } from 'astro';
 import { COOKIE, SESSION_DAYS, createSession, exchangeCode, isAllowed } from '../../lib/auth';
+import { rememberPerson } from '../../lib/db';
 
 export const GET: APIRoute = async ({ cookies, url, redirect }) => {
   const state = url.searchParams.get('state');
@@ -10,6 +11,7 @@ export const GET: APIRoute = async ({ cookies, url, redirect }) => {
   try {
     const user = await exchangeCode(url.origin, code);
     if (!user.verified || !isAllowed(user.email)) return redirect('/auth/login?error=denied');
+    await rememberPerson(user.email, user.name);
     cookies.set(COOKIE, createSession(user.email, user.name), {
       httpOnly: true,
       sameSite: 'lax',

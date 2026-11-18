@@ -161,7 +161,7 @@ test('transactions save in batches and re-syncing updates rather than duplicates
   const { PGlite } = await import('@electric-sql/pglite');
   const { upsertTransactions, deleteTransactions } = await import('../src/lib/txn-store.ts');
   const pg = new PGlite();
-  await pg.query('CREATE TABLE transactions (id text PRIMARY KEY, item_id text, account_id text, date text, name text, merchant_name text, amount double precision, category text, category_detail text, pending boolean, channel text)');
+  await pg.query('CREATE TABLE transactions (id text PRIMARY KEY, item_id text, account_id text, date text, name text, merchant_name text, amount double precision, category text, category_detail text, pending boolean, channel text, account_owner text)');
   const make = (i: number, amount: number) => ({ transaction_id: 't' + i, account_id: 'a', date: '2026-11-01', name: 'Shop ' + i, amount, pending: false, personal_finance_category: { primary: 'FOOD_AND_DRINK', detailed: 'FOOD_AND_DRINK_GROCERIES' } });
   const rows = Array.from({ length: 250 }, (_, i) => make(i, i));
   assert.equal(await upsertTransactions(pg, 'item', [...rows, make(3, 999)]), 250); // t3 appears twice: last copy wins

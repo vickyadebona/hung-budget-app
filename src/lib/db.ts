@@ -132,6 +132,10 @@ export const SCHEMA = [
     set_by     text NOT NULL,
     updated_at text NOT NULL
   )`,
+  // Which cardholder made a purchase, when the bank says (most do not). Otherwise it is whoever linked the account.
+  `ALTER TABLE transactions ADD COLUMN IF NOT EXISTS account_owner text`,
+  // Each person's display name, saved when they sign in, so the app can say who linked what.
+  `CREATE TABLE IF NOT EXISTS people (email text PRIMARY KEY, name text NOT NULL, updated_at text NOT NULL)`,
   // Parts of a card balance with their own end date: a 0% balance transfer, a 0% purchase offer, or a deferred-interest
   // purchase. A card can have several. amount NULL means "whatever is at 0%" (or the whole balance if the bank does not say).
   `CREATE TABLE IF NOT EXISTS card_deferrals (
@@ -264,4 +268,26 @@ export async function setMeta(sql: Sql, key: string, value: string): Promise<voi
     'INSERT INTO meta (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value',
     [key, value],
   );
+}
+
+/** Saves a person's display name at sign-in. Never blocks the sign-in if the database is unreachable. */
+export async function rememberPerson(email: string, name: string): Promise<void> {
+  try {
+    const sql = await db();
+    await sql.query(
+      `INSERT INTO people (email, name, updated_at) VALUES ($1, $2, $3)
+       ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name, updated_at = EXCLUDED.updated_at`,
+      [email.toLowerCase(), name.slice(0, 100), new Date().toISOString()],
+    );
+  } catch (e) {
+    console.error('[people]', e instanceof Error ? e.message : e);
+  }
+}
+
+/** First name to show for an email: the saved name, else the part before the @, capitalised. */
+export function firstName(email: string, saved?: string | null): string {
+  const n = (saved ?? '').trim().split(/\s+/)[0];
+  if (n) return n;
+  const local = email.split('@')[0].split(/[._+-]/)[0].replace(/\d+$/, '');
+  return local ? local[0].toUpperCase() + local.slice(1) : email;
 }

@@ -6,7 +6,7 @@ export interface Runner {
   query(text: string, params?: unknown[]): Promise<unknown>;
 }
 
-const COLS = ['id', 'item_id', 'account_id', 'date', 'name', 'merchant_name', 'amount', 'category', 'category_detail', 'pending', 'channel'];
+const COLS = ['id', 'item_id', 'account_id', 'date', 'name', 'merchant_name', 'amount', 'category', 'category_detail', 'pending', 'channel', 'account_owner'];
 export const BATCH = 100;
 
 /** Rows in Plaid's own shape (transaction_id, personal_finance_category, ...). Later copies of the same id win. */
@@ -21,7 +21,7 @@ export async function upsertTransactions(sql: Runner, itemId: string, plaidRows:
       params.push(
         t.transaction_id, itemId, t.account_id, t.date, t.name ?? '', t.merchant_name ?? null, t.amount,
         t.personal_finance_category?.primary ?? null, t.personal_finance_category?.detailed ?? null,
-        t.pending === true, t.payment_channel ?? null,
+        t.pending === true, t.payment_channel ?? null, t.account_owner ?? null, // the cardholder, when the bank says (rare)
       );
       return '(' + COLS.map((_, c) => '$' + (r * COLS.length + c + 1)).join(',') + ')';
     });
@@ -29,7 +29,7 @@ export async function upsertTransactions(sql: Runner, itemId: string, plaidRows:
       `INSERT INTO transactions (${COLS.join(', ')}) VALUES ${values.join(', ')}
        ON CONFLICT (id) DO UPDATE SET date = EXCLUDED.date, name = EXCLUDED.name, merchant_name = EXCLUDED.merchant_name,
          amount = EXCLUDED.amount, category = EXCLUDED.category, category_detail = EXCLUDED.category_detail,
-         pending = EXCLUDED.pending, channel = EXCLUDED.channel`,
+         pending = EXCLUDED.pending, channel = EXCLUDED.channel, account_owner = EXCLUDED.account_owner`,
       params,
     );
   }
