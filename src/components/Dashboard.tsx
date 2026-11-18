@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Landmark, MoreHorizontal, Plus, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type { Summary } from '@/lib/summary';
-import { APR_LABEL, type AprType } from '@/lib/cards';
+import { APR_LABEL, DEFERRAL_KINDS, DEFERRAL_LABEL, type Apr, type AprType, type DeferralKind, type DeferralPlan, type DeferralSummary } from '@/lib/cards';
 import type { Notice } from '@/lib/budget-rules';
 import { Notices } from './Budget';
 import { api, money } from './shared';
@@ -94,42 +94,105 @@ function rateLine(c: Card): string {
 
 const field = 'h-8 rounded-lg border border-input bg-background px-2 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50';
 
-/** Shows when a 0% offer ends and what to pay each month to clear it; lets you set or change the date. */
-function PromoRow({ card, busy, saving, onSave }: { card: Card; busy: boolean; saving: boolean; onSave: (ends: string | null) => void }) {
-  const [editing, setEditing] = useState(false);
-  const [date, setDate] = useState(card.promo?.ends ?? '');
-  const p = card.promo;
-  const tone = !p ? '' : p.level === 'ended' || p.level === 'urgent' ? 'text-destructive' : p.level === 'soon' ? 'font-medium text-warn-foreground' : 'text-muted-foreground';
-  const save = (v: string | null) => { onSave(v); setEditing(false); };
+type Plan = DeferralPlan;
+type Draft = { id?: string; kind: DeferralKind; label: string; amount: string; ends: string };
+export type DeferralSave = { id?: string; accountId: string; kind: DeferralKind; label: string; amount: number | null; ends: string };
 
-  if (editing) {
-    return (
-      <form className="mt-1.5 flex flex-wrap items-center gap-2" onSubmit={(e) => { e.preventDefault(); if (date) save(date); }}>
-        <label className="text-xs text-muted-foreground" htmlFor={`promo-${card.id}`}>0% offer ends</label>
-        <input id={`promo-${card.id}`} type="date" className={field} value={date} onChange={(e) => setDate(e.target.value)} required />
-        <Button size="sm" type="submit" disabled={busy || !date} loading={saving}>Save</Button>
-        <Button size="sm" type="button" variant="ghost" onClick={() => { setEditing(false); setDate(p?.ends ?? ''); }}>Cancel</Button>
-        {p && <Button size="sm" type="button" variant="ghost" className="text-destructive" disabled={busy} onClick={() => save(null)}>Remove</Button>}
-      </form>
-    );
+const planName = (p: { kind: DeferralKind; label: string }) => p.label || DEFERRAL_LABEL[p.kind];
+
+/** "$3,000 · ends Thu, Mar 1 (in 104 days) · pay $750/mo" */
+function planLine(p: Plan): string {
+  const amount = `${money(p.balance)}${p.amount === null ? ' (what the bank shows at 0%)' : ''}`;
+  if (p.level === 'ended') {
+    return `${amount} · ended ${longDay(p.ends)} · ${p.kind === 'deferred' ? 'interest may be added back if unpaid' : 'now charged interest'}`;
   }
-  if (!p) {
-    // Worth offering when Plaid shows a 0% rate, or when the bank shares no rates at all (it may still have one).
-    if (card.zeroAprs.length === 0 && card.aprs.length > 0) return null;
-    return (
-      <button type="button" className="mt-0.5 text-xs text-primary underline-offset-4 hover:underline" onClick={() => setEditing(true)}>
-        {card.zeroAprs.length > 0 ? 'Add when the 0% offer ends' : 'Have a 0% offer? Add its end date'}
-      </button>
-    );
-  }
+  return `${amount} · ends ${longDay(p.ends)}${inDays(p.daysLeft)}${p.monthly != null ? ` · pay ${money(p.monthly)}/mo` : ''}`;
+}
+
+/**
+ * The 0% and deferred-interest parts of one card's balance, each with its own end date and monthly payoff.
+ * Offered on every credit card: banks rarely say when an offer ends, so these are typed in.
+ */
+function Deferrals({ card, busy, savingKey, onSave, onRemove }: {
+  card: Card; busy: boolean; savingKey: string | null;
+  onSave: (d: DeferralSave) => void; onRemove: (id: string) => void;
+}) {
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const { plans, rest, overBalance } = card.deferrals as DeferralSummary;
+  const bt = (card.zeroAprs as Apr[]).find((z) => z.type === 'balance_transfer_apr');
+  const bankZero = card.zeroBalance as number | null;
+  const open = (p?: Plan) => setDraft(p
+    ? { id: p.id, kind: p.kind, label: p.label, amount: p.amount == null ? '' : String(p.amount), ends: p.ends }
+    : { kind: bt ? 'balance-transfer' : 'deferred', label: '', amount: '', ends: '' });
+  const tone = (p: Plan) => p.level === 'ended' || p.level === 'urgent' ? 'text-destructive' : p.level === 'soon' ? 'font-medium text-warn-foreground' : 'text-muted-foreground';
+
   return (
-    <p className={`text-xs ${tone}`}>
-      {p.level === 'ended'
-        ? `0% ended ${longDay(p.ends)}${p.balance > 0 ? ` · ${money(p.balance)} may now be charged interest` : ''}`
-        : `0% ends ${longDay(p.ends)}${inDays(p.daysLeft)}${p.monthly != null ? ` · pay ${money(p.monthly)}/mo to clear ${money(p.balance)}` : ''}`}
-      {' '}
-      <button type="button" className="text-primary underline-offset-4 hover:underline" onClick={() => setEditing(true)}>Change</button>
-    </p>
+    <div className="mt-1 grid gap-1">
+      {plans.length > 0 && (
+        <ul className="grid gap-1">
+          {plans.map((p) => (
+            <li key={p.id} className={`text-xs ${tone(p)}`}>
+              <span className="font-medium">{planName(p)}</span>: {planLine(p)}{' '}
+              <button type="button" className="text-primary underline-offset-4 hover:underline" onClick={() => open(p)}>Change</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {plans.length > 0 && rest != null && rest > 0 && <p className="text-xs text-muted-foreground">Rest of the balance, at the normal rate: {money(rest)}</p>}
+      {overBalance && <p className="text-xs text-warn-foreground">These add up to more than the card balance. Lower the amounts as you pay them down.</p>}
+
+      {draft ? (
+        <form className="mt-1 grid gap-2 rounded-xl border p-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!draft.ends) return;
+            onSave({ id: draft.id, accountId: card.id, kind: draft.kind, label: draft.label, amount: draft.amount.trim() ? Number(draft.amount) : null, ends: draft.ends });
+            setDraft(null);
+          }}>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label className="grid gap-1 text-xs text-muted-foreground">
+              Kind
+              <select className={field} value={draft.kind} onChange={(e) => setDraft({ ...draft, kind: e.target.value as DeferralKind })}>
+                {DEFERRAL_KINDS.map((k) => <option key={k} value={k}>{DEFERRAL_LABEL[k]}</option>)}
+              </select>
+            </label>
+            <label className="grid gap-1 text-xs text-muted-foreground">
+              Name (optional)
+              <input className={field} value={draft.label} maxLength={60} placeholder={draft.kind === 'deferred' ? 'e.g. Couch' : 'e.g. From the old Visa'}
+                onChange={(e) => setDraft({ ...draft, label: e.target.value })} />
+            </label>
+            <label className="grid gap-1 text-xs text-muted-foreground">
+              Amount
+              <input className={field} inputMode="decimal" value={draft.amount}
+                placeholder={bankZero != null ? `Leave blank for ${money(bankZero)} (bank's 0% figure)` : 'Leave blank for the whole balance'}
+                onChange={(e) => setDraft({ ...draft, amount: e.target.value.replace(/[^0-9.]/g, '') })} />
+            </label>
+            <label className="grid gap-1 text-xs text-muted-foreground">
+              {draft.kind === 'deferred' ? 'Pay off by' : '0% ends'}
+              <input className={field} type="date" value={draft.ends} required onChange={(e) => setDraft({ ...draft, ends: e.target.value })} />
+            </label>
+          </div>
+          {draft.kind === 'deferred' && (
+            <p className="text-xs text-muted-foreground">With deferred interest, anything left after this date can be charged all the interest from the start.</p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" type="submit" disabled={busy || !draft.ends} loading={savingKey === `deferral:${card.id}`}>Save</Button>
+            <Button size="sm" type="button" variant="ghost" onClick={() => setDraft(null)}>Cancel</Button>
+            {draft.id && (
+              <Button size="sm" type="button" variant="ghost" className="text-destructive" disabled={busy}
+                onClick={() => { onRemove(draft.id!); setDraft(null); }}>Remove</Button>
+            )}
+          </div>
+        </form>
+      ) : (
+        <button type="button" className="justify-self-start text-xs text-primary underline-offset-4 hover:underline" onClick={() => open()}>
+          {plans.length > 0
+            ? '+ Add another 0% or deferred amount'
+            : bt ? `Your bank shows ${bt.balance != null ? money(bt.balance) : 'a balance'} at 0% (balance transfer). Add when it ends`
+            : '+ Add a 0% offer, balance transfer or deferred amount'}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -262,11 +325,11 @@ export default function Dashboard({ initial, userName, userEmail, demo = false, 
       {data.promoNotices.length > 0 && (
         <ul className="grid gap-2" aria-label="0% offers ending">
           {data.promoNotices.map((n) => (
-            <li key={n.accountId} className={`rounded-xl px-3 py-2 text-sm ${n.level === 'soon' ? 'bg-warn text-warn-foreground' : 'bg-destructive/10 text-destructive'}`}>
-              <span className="font-medium">{n.name}</span>
+            <li key={n.id} className={`rounded-xl px-3 py-2 text-sm ${n.level === 'soon' ? 'bg-warn text-warn-foreground' : 'bg-destructive/10 text-destructive'}`}>
+              <span className="font-medium">{n.name}</span> ({planName(n)})
               {n.level === 'ended'
-                ? `: 0% offer ended ${longDay(n.ends)}, ${money(n.balance)} may now be charged interest`
-                : `: 0% ends ${longDay(n.ends)}${inDays(n.daysLeft)}. Pay ${money(n.monthly ?? n.balance)}/mo to clear ${money(n.balance)}`}
+                ? `: ended ${longDay(n.ends)}, ${money(n.balance)} ${n.kind === 'deferred' ? 'may have interest added back' : 'may now be charged interest'}`
+                : `: ${n.kind === 'deferred' ? 'pay off by' : '0% ends'} ${longDay(n.ends)}${inDays(n.daysLeft)}. Pay ${money(n.monthly ?? n.balance)}/mo to clear ${money(n.balance)}`}
             </li>
           ))}
         </ul>
@@ -359,8 +422,11 @@ export default function Dashboard({ initial, userName, userEmail, demo = false, 
                 <div className="flex items-baseline justify-between gap-3">
                   <span className="flex min-w-0 flex-1 items-baseline gap-2">
                     <span className="truncate font-medium">{c.name}{c.mask && <span className="font-normal text-muted-foreground"> ··{c.mask}</span>}</span>
-                    {(c.zeroAprs.length > 0 || c.promo) && (
+                    {(c.zeroAprs.length > 0 || (c.deferrals.plans as Plan[]).some((p) => p.kind !== 'deferred')) && (
                       <span className="shrink-0 rounded-full bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary">0% APR</span>
+                    )}
+                    {(c.deferrals.plans as Plan[]).some((p) => p.kind === 'deferred') && (
+                      <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">Deferred</span>
                     )}
                   </span>
                   <span className="shrink-0 tabular-nums">{c.current == null ? '—' : money(c.current)}</span>
@@ -370,8 +436,9 @@ export default function Dashboard({ initial, userName, userEmail, demo = false, 
                   <span className="text-muted-foreground"> · {bankName(c.item_id)}{c.shared && ' · shared'}</span>
                 </p>
                 {rateLine(c) && <p className="text-xs text-muted-foreground">{rateLine(c)}</p>}
-                <PromoRow card={c} busy={!!busy} saving={busyKey === `promo:${c.id}`}
-                  onSave={(ends) => run('Saving', async () => { await api('/api/cards/promo', { accountId: c.id, ends }); await refresh(); }, `promo:${c.id}`)} />
+                <Deferrals card={c} busy={!!busy} savingKey={busyKey}
+                  onSave={(d) => run('Saving', async () => { await api('/api/cards/deferral', d); await refresh(); }, `deferral:${c.id}`)}
+                  onRemove={(id) => run('Removing', async () => { await api('/api/cards/deferral', { id, delete: true }); await refresh(); }, `deferral:${c.id}`)} />
               </li>
             ))}
           </ul>

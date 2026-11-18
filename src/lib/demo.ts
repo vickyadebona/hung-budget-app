@@ -97,7 +97,12 @@ export async function seedDemo(sql: Sql): Promise<void> {
       JSON.stringify([{ type: 'balance_transfer_apr', pct: 0, balance: 1450, interest: 0 }, { type: 'purchase_apr', pct: 27.24, balance: 0, interest: 0 }]),
     ],
   );
-  await sql.query('INSERT INTO card_promos (account_id, ends, set_by, updated_at) VALUES ($1,$2,$3,$4)', [PROMO, shift(t0, 55), DEMO_USER.email, now]);
+  await sql.query(
+    `INSERT INTO card_deferrals (id, account_id, kind, label, amount, ends, set_by, updated_at) VALUES
+       ('demo-def-bt', $1, 'balance-transfer', '', NULL, $2, $5, $6),
+       ('demo-def-laptop', $3, 'deferred', 'Laptop', 600, $4, $5, $6)`,
+    [PROMO, shift(t0, 55), REWARDS, shift(t0, 140), DEMO_USER.email, now],
+  );
 
   // About four months of everyday life.
   const rand = rng(20261116);

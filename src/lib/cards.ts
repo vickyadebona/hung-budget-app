@@ -108,3 +108,36 @@ export function promoPlan(ends: string, today: string, zeroBalance: number | nul
   const monthly = daysLeft < 0 || balance <= 0 ? null : Math.ceil(balance / paymentsLeft);
   return { ends, daysLeft, level, balance, paymentsLeft, monthly };
 }
+
+/* ---------- several deferred amounts on one card ---------- */
+
+export type DeferralKind = 'balance-transfer' | 'promo' | 'deferred';
+export const DEFERRAL_KINDS: DeferralKind[] = ['balance-transfer', 'promo', 'deferred'];
+export const DEFERRAL_LABEL: Record<DeferralKind, string> = {
+  'balance-transfer': '0% balance transfer',
+  promo: '0% purchase offer',
+  deferred: 'Deferred interest',
+};
+
+export interface Deferral { id: string; kind: DeferralKind; label: string; amount: number | null; ends: string }
+export type DeferralPlan = PromoPlan & { id: string; kind: DeferralKind; label: string; amount: number | null };
+
+/**
+ * A payoff plan for each deferred part of a card's balance, soonest first. A part with no amount typed in
+ * covers what the bank reports at 0%, or else whatever of the card balance the other parts do not.
+ * `rest` is the part of the balance on the card's normal rate.
+ */
+export interface DeferralSummary { plans: DeferralPlan[]; deferred: number; rest: number | null; overBalance: boolean }
+
+export function deferralPlans(list: Deferral[], today: string, zeroBalance: number | null, cardBalance: number | null): DeferralSummary {
+  const owed = Math.max(0, cardBalance ?? 0);
+  const fixed = list.reduce((n, d) => n + (d.amount ?? 0), 0);
+  const plans: DeferralPlan[] = list
+    .map((d) => {
+      const amount = d.amount ?? zeroBalance ?? Math.max(0, owed - fixed);
+      return { ...promoPlan(d.ends, today, amount, null), id: d.id, kind: d.kind, label: d.label, amount: d.amount };
+    })
+    .sort((a, b) => a.ends.localeCompare(b.ends));
+  const deferred = plans.reduce((n, p) => n + p.balance, 0);
+  return { plans, deferred, rest: cardBalance == null ? null : Math.max(0, owed - deferred), overBalance: cardBalance != null && deferred > owed + 0.5 };
+}

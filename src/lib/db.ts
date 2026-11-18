@@ -132,6 +132,22 @@ export const SCHEMA = [
     set_by     text NOT NULL,
     updated_at text NOT NULL
   )`,
+  // Parts of a card balance with their own end date: a 0% balance transfer, a 0% purchase offer, or a deferred-interest
+  // purchase. A card can have several. amount NULL means "whatever is at 0%" (or the whole balance if the bank does not say).
+  `CREATE TABLE IF NOT EXISTS card_deferrals (
+    id         text PRIMARY KEY,
+    account_id text NOT NULL,
+    kind       text NOT NULL DEFAULT 'promo',
+    label      text NOT NULL DEFAULT '',
+    amount     double precision,
+    ends       text NOT NULL,
+    set_by     text NOT NULL,
+    updated_at text NOT NULL
+  )`,
+  // One-time move of the older single "0% ends" date per card into the list above.
+  `INSERT INTO card_deferrals (id, account_id, kind, label, amount, ends, set_by, updated_at)
+     SELECT 'promo:' || account_id, account_id, 'promo', '', NULL, ends, set_by, updated_at FROM card_promos ON CONFLICT (id) DO NOTHING`,
+  `DELETE FROM card_promos`,
   // Savings goals. A goal can point at a linked savings account; set-asides you log by hand go in goal_entries.
   `CREATE TABLE IF NOT EXISTS goals (
     id          text PRIMARY KEY,

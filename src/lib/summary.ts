@@ -4,7 +4,7 @@ import { findRecurring, merchantKey, monthlyCost } from './recurring';
 import { appleSubscriptions } from './apple-store';
 import { linkSubscriptionsFor } from './link-store';
 import { linkFrequency, sameMerchant } from './link';
-import { appleFrequency, cardState, cleanAprs, daysUntil, interestCharged, needsAttention, promoPlan, zeroAprs } from './cards';
+import { appleFrequency, cardState, cleanAprs, daysUntil, deferralPlans, interestCharged, needsAttention, zeroAprs, type Deferral, type DeferralKind, type DeferralPlan } from './cards';
 import { sharedAccounts } from './dedupe';
 import { judge, MARKS, type Mark } from './subscriptions';
 
@@ -146,10 +146,15 @@ export async function getSummary() {
     if (!prev || String(l.updated_at) > String(prev.updated_at)) liabBy.set(kept, l);
   }
   const num = (v: unknown) => (v == null ? null : Number(v));
-  // 0% end dates you typed in. A date set on the other login's copy of a shared card still counts.
-  const promoRows = (await sql.query('SELECT account_id, ends FROM card_promos')).rows;
-  const promoBy = new Map<string, string>();
-  for (const p of promoRows) promoBy.set(dup.get(p.account_id) ?? p.account_id, p.ends);
+  // 0% and deferred amounts you typed in. One set on the other login's copy of a shared card still counts.
+  const deferralRows = (await sql.query('SELECT id, account_id, kind, label, amount, ends FROM card_deferrals ORDER BY ends')).rows;
+  const deferralsBy = new Map<string, Deferral[]>();
+  for (const r of deferralRows) {
+    const acct = dup.get(r.account_id) ?? r.account_id;
+    (deferralsBy.get(acct) ?? deferralsBy.set(acct, []).get(acct)!).push({
+      id: r.id, kind: r.kind as DeferralKind, label: r.label ?? '', amount: r.amount == null ? null : Number(r.amount), ends: r.ends,
+    });
+  }
 
   const cards = accounts
     .filter((a) => a.type === 'credit')
@@ -158,7 +163,6 @@ export async function getSummary() {
       const aprs = cleanAprsStored(l?.aprs);
       const zero = zeroAprs(aprs);
       const zeroBalance = zero.some((z) => z.balance !== null) ? zero.reduce((n, z) => n + (z.balance ?? 0), 0) : null;
-      const ends = promoBy.get(a.id) ?? null;
       const details = l
         ? {
             next_due: l.next_due as string | null, minimum: num(l.minimum), statement_balance: num(l.statement_balance),
@@ -172,7 +176,8 @@ export async function getSummary() {
         aprs,
         zeroAprs: zero,
         interestLastStatement: l ? interestCharged(aprs) : null,
-        promo: ends ? promoPlan(ends, today, zeroBalance, a.current) : null,
+        zeroBalance,
+        deferrals: deferralPlans(deferralsBy.get(a.id) ?? [], today, zeroBalance, a.current),
       };
     });
 
@@ -195,8 +200,9 @@ export async function getSummary() {
     }));
   // 0% offers ending within 60 days (or already ended and still owing).
   const promoNotices = cards
-    .filter((c) => c.promo && c.promo.level !== 'ok' && c.promo.balance > 0)
-    .map((c) => ({ accountId: c.id, name: `${c.name}${c.mask ? ' ··' + c.mask : ''}`, ...c.promo! }))
+    .flatMap((c) => (c.deferrals.plans as DeferralPlan[])
+      .filter((p) => p.level !== 'ok' && p.balance > 0)
+      .map((p) => ({ accountId: c.id, name: `${c.name}${c.mask ? ' ··' + c.mask : ''}`, ...p })))
     .sort((a, b) => a.daysLeft - b.daysLeft);
   const cardNotices = cards
     .filter((c) => needsAttention(c.state))
