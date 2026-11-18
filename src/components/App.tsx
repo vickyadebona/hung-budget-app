@@ -87,6 +87,16 @@ export default function App({ month, userName, userEmail, demo = false }: { mont
   }, [month]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Pull the latest from the banks, then reload what every page shows. Used by Transactions and Recurring.
+  const syncBanks = useCallback(async () => {
+    await api('/api/sync', {});
+    setSummary(await api<Summary>('/api/summary'));
+  }, []);
+  // Re-read the summary only (no bank sync). Used after you mark a subscription cancelled, yearly, and so on.
+  const reloadSummary = useCallback(async () => {
+    setSummary(await api<Summary>('/api/summary'));
+  }, []);
   useEffect(() => {
     setPage(fromHash());
     const onHash = () => setPage(fromHash());
@@ -167,10 +177,10 @@ export default function App({ month, userName, userEmail, demo = false }: { mont
             {/* All pages stay mounted so a half-typed edit survives switching pages. */}
             <div hidden={page !== 'overview'}>
               <Dashboard initial={data.summary} userName={userName} userEmail={userEmail} demo={demo} notices={data.budget.notices}
-                onOpenBudget={() => go('budget')} onOpenRecurring={() => go('recurring')} onSummary={setSummary} />
+                onOpenBudget={() => go('budget')} onOpenRecurring={() => go('recurring')} onSummary={setSummary} latest={summary} />
             </div>
-            <div hidden={page !== 'transactions'}><Transactions active={page === 'transactions'} /></div>
-            <div hidden={page !== 'recurring'}><Recurring data={summary ?? data.summary} /></div>
+            <div hidden={page !== 'transactions'}><Transactions active={page === 'transactions'} onSync={syncBanks} /></div>
+            <div hidden={page !== 'recurring'}><Recurring data={summary ?? data.summary} onRefresh={syncBanks} onChanged={reloadSummary} /></div>
             <div hidden={page !== 'budget'}><Budget initial={data.budget} /></div>
             <div hidden={page !== 'goals'}><Goals /></div>
             <div hidden={page !== 'wishlist'}><Wishlist /></div>

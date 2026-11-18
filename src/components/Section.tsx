@@ -1,3 +1,25 @@
+import { useState } from 'react';
+import { RefreshCw } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+
+/** Pulls the latest from the banks. Shows a spinner while it runs and the reason if it fails. */
+export function RefreshButton({ onRefresh }: { onRefresh: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <span className="flex items-center gap-2">
+      {error && <span role="alert" className="text-xs text-destructive">{error}</span>}
+      <Button variant="outline" size="lg" loading={busy} onClick={async () => {
+        setBusy(true);
+        setError(null);
+        try { await onRefresh(); } catch (e) { setError(e instanceof Error ? e.message : 'Could not refresh'); } finally { setBusy(false); }
+      }}>
+        <RefreshCw /> Refresh
+      </Button>
+    </span>
+  );
+}
+
 /** A card with a title row, used by every page. */
 export function Section({ title, aside, children }: { title: string; aside?: React.ReactNode; children: React.ReactNode }) {
   return (

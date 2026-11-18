@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Landmark, Plus, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Landmark, MoreHorizontal, Plus, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type { Summary } from '@/lib/summary';
 import { APR_LABEL, type AprType } from '@/lib/cards';
@@ -134,12 +134,13 @@ function PromoRow({ card, busy, saving, onSave }: { card: Card; busy: boolean; s
 }
 
 
-export default function Dashboard({ initial, userName, userEmail, demo = false, notices = [], onOpenBudget, onOpenRecurring, onSummary }: {
+export default function Dashboard({ initial, userName, userEmail, demo = false, notices = [], onOpenBudget, onOpenRecurring, onSummary, latest }: {
   initial: Summary; userName: string; userEmail: string; demo?: boolean; notices?: Notice[];
-  onOpenBudget?: () => void; onOpenRecurring?: () => void; onSummary?: (s: Summary) => void;
+  onOpenBudget?: () => void; onOpenRecurring?: () => void; onSummary?: (s: Summary) => void; latest?: Summary | null;
 }) {
   const [data, setData] = useState(initial);
   useEffect(() => { onSummary?.(data); }, [data, onSummary]); // the Recurring page shows the same, freshest data
+  useEffect(() => { if (latest) setData(latest); }, [latest]); // ...and a refresh from another page shows here too
   const [busy, setBusy] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null); // which button started the current action
   const [error, setError] = useState<string | null>(null);
@@ -147,6 +148,9 @@ export default function Dashboard({ initial, userName, userEmail, demo = false, 
   const handler = useRef<{ open(): void; destroy(): void } | null>(null);
 
   const refresh = useCallback(async () => setData(await api<Summary>('/api/summary')), []);
+
+  // Fix a charge in the "Coming up" list: it was cancelled, it is yearly now, or it is not a subscription.
+  const [openUp, setOpenUp] = useState<string | null>(null);
 
   const run = useCallback(async (label: string, fn: () => Promise<void>, key: string | null = null) => {
     setBusy(label);
@@ -161,6 +165,13 @@ export default function Dashboard({ initial, userName, userEmail, demo = false, 
       setBusyKey(null);
     }
   }, []);
+
+  const markUpcoming = (key: string, label: string, mark: string | null) =>
+    run('Saving your change', async () => {
+      await api('/api/subscriptions/mark', { key, label, mark });
+      await refresh();
+      setOpenUp(null);
+    }, `mark:${key}:${mark ?? 'clear'}`);
 
   const openLink = useCallback(async (linkToken: string, mode: LinkMode, receivedRedirectUri?: string) => {
     await loadPlaid();
@@ -303,10 +314,31 @@ export default function Dashboard({ initial, userName, userEmail, demo = false, 
         {data.upcoming.length === 0 ? <Empty>Nothing predicted yet.</Empty> : (
           <ul className="divide-y">
             {data.upcoming.map((r) => (
-              <li key={r.id} className="flex items-center justify-between gap-3 py-2 text-sm">
-                <span className="min-w-14 shrink-0 text-muted-foreground">{day(r.nextDate!)}</span>
-                <span className="min-w-0 flex-1 truncate">{r.label}</span>
-                <span className="tabular-nums">{money(r.amount)}</span>
+              <li key={r.id} className="py-1.5 text-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="min-w-14 shrink-0 text-muted-foreground">{day(r.nextDate!)}</span>
+                  <span className="min-w-0 flex-1 truncate">{r.label}</span>
+                  <span className="tabular-nums">{money(r.amount)}</span>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Fix ${r.label}`} aria-expanded={openUp === r.key}
+                    onClick={() => setOpenUp(openUp === r.key ? null : r.key)}><MoreHorizontal /></Button>
+                </div>
+                {openUp === r.key && (
+                  <div className="mt-1.5 flex flex-wrap gap-2 pb-1">
+                    {([
+                      ['cancelled', 'I cancelled it'],
+                      ['yearly', "It's yearly now"],
+                      ['not-subscription', 'Not a subscription'],
+                    ] as [string, string][]).filter(([m]) => m !== 'yearly' || (r.frequency !== 'yearly' && r.frequency !== 'ANNUALLY')).map(([m, label]) => (
+                      <Button key={m} size="sm" variant="outline" disabled={!!busy} loading={busyKey === `mark:${r.key}:${m}`}
+                        onClick={() => markUpcoming(r.key, r.label, m)}>{label}</Button>
+                    ))}
+                    {r.mark && (
+                      <Button size="sm" variant="ghost" disabled={!!busy} loading={busyKey === `mark:${r.key}:clear`}
+                        onClick={() => markUpcoming(r.key, r.label, null)}>Undo my change</Button>
+                    )}
+                    <Button size="sm" variant="ghost" onClick={() => setOpenUp(null)}>Close</Button>
+                  </div>
+                )}
               </li>
             ))}
           </ul>

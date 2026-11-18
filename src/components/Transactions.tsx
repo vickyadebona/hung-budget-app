@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { shiftMonth } from '@/lib/budget-rules';
 import type { Transactions as TxnData } from '@/lib/transactions';
 import { api, money } from './shared';
-import { Empty, PageHeader, Section } from './Section';
+import { Empty, PageHeader, RefreshButton, Section } from './Section';
 
 const thisMonth = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit' }).format(new Date()).slice(0, 7);
 const monthName = (m: string) => new Date(m + '-15T12:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
@@ -12,7 +12,7 @@ const dayHeading = (d: string) => new Date(d + 'T12:00:00').toLocaleDateString('
 const category = (c: string | null) => (c ? c.charAt(0) + c.slice(1).toLowerCase().replace(/_/g, ' ') : null);
 
 /** Recent transactions for one month (this month to start), newest first, grouped by day. */
-export default function Transactions({ active }: { active: boolean }) {
+export default function Transactions({ active, onSync }: { active: boolean; onSync: () => Promise<void> }) {
   const [month, setMonth] = useState(thisMonth());
   const [data, setData] = useState<TxnData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -54,6 +54,7 @@ export default function Transactions({ active }: { active: boolean }) {
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-4 pb-6">
       <PageHeader title="Transactions" subtitle={monthName(month)}>
+        <RefreshButton onRefresh={async () => { await onSync(); await load(month); }} />
         {month !== current && <Button variant="outline" size="sm" disabled={loading} onClick={() => load(current)}>This month</Button>}
         <Button variant="ghost" size="icon" aria-label="Previous month" disabled={loading} onClick={() => load(shiftMonth(month, -1))}><ChevronLeft /></Button>
         <Button variant="ghost" size="icon" aria-label="Next month" disabled={loading || month >= current} onClick={() => load(shiftMonth(month, 1))}><ChevronRight /></Button>
