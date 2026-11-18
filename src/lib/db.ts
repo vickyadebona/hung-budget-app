@@ -132,6 +132,52 @@ export const SCHEMA = [
     set_by     text NOT NULL,
     updated_at text NOT NULL
   )`,
+  // Savings goals. A goal can point at a linked savings account; set-asides you log by hand go in goal_entries.
+  `CREATE TABLE IF NOT EXISTS goals (
+    id          text PRIMARY KEY,
+    name        text NOT NULL,
+    target      double precision NOT NULL,
+    target_date text,
+    account_id  text,
+    created_at  text NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS goal_entries (
+    id       text PRIMARY KEY,
+    goal_id  text NOT NULL,
+    amount   double precision NOT NULL,
+    note     text NOT NULL DEFAULT '',
+    date     text NOT NULL,
+    by_email text NOT NULL
+  )`,
+  // Wishlist: things you want to buy. Each item can have several store links, and each link's price is tracked.
+  `CREATE TABLE IF NOT EXISTS wishlist_items (
+    id           text PRIMARY KEY,
+    name         text NOT NULL,
+    note         text NOT NULL DEFAULT '',
+    target_price double precision,
+    created_by   text NOT NULL,
+    created_at   text NOT NULL,
+    bought_at    text
+  )`,
+  `CREATE TABLE IF NOT EXISTS wishlist_links (
+    id         text PRIMARY KEY,
+    item_id    text NOT NULL,
+    url        text NOT NULL,
+    store      text NOT NULL,
+    price      double precision,
+    price_prev double precision,
+    status     text NOT NULL DEFAULT 'pending',
+    message    text NOT NULL DEFAULT '',
+    checked_at text,
+    in_stock   boolean,
+    created_at text NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS wishlist_prices (
+    link_id text NOT NULL,
+    date    text NOT NULL,
+    price   double precision NOT NULL,
+    PRIMARY KEY (link_id, date)
+  )`,
 ];
 
 let ready: Promise<Sql> | null = null;

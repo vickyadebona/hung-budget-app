@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LayoutDashboard, Menu, PiggyBank, ReceiptText, Repeat, RefreshCw, Settings as SettingsIcon, X } from 'lucide-react';
+import { LayoutDashboard, Menu, PiggyBank, ReceiptText, Repeat, RefreshCw, Settings as SettingsIcon, Target, Gift, X } from 'lucide-react';
 import Dashboard from './Dashboard';
 import Budget from './Budget';
 import Transactions from './Transactions';
 import Recurring from './Recurring';
+import Goals from './Goals';
+import Wishlist from './Wishlist';
 import Settings from './Settings';
 import PageSkeleton from './Skeleton';
 import { Button } from '@/components/ui/button';
@@ -11,12 +13,14 @@ import { api } from './shared';
 import type { Summary } from '@/lib/summary';
 import type { Budget as BudgetData } from '@/lib/budget';
 
-type Page = 'overview' | 'transactions' | 'recurring' | 'budget';
+type Page = 'overview' | 'transactions' | 'recurring' | 'budget' | 'goals' | 'wishlist';
 const PAGES: { id: Page; label: string; Icon: typeof PiggyBank }[] = [
   { id: 'overview', label: 'Overview', Icon: LayoutDashboard },
   { id: 'transactions', label: 'Transactions', Icon: ReceiptText },
   { id: 'recurring', label: 'Recurring', Icon: Repeat },
   { id: 'budget', label: 'Budget', Icon: PiggyBank },
+  { id: 'goals', label: 'Goals', Icon: Target },
+  { id: 'wishlist', label: 'Wishlist', Icon: Gift },
 ];
 const fromHash = (): Page => {
   const h = location.hash.slice(1);
@@ -168,6 +172,8 @@ export default function App({ month, userName, userEmail, demo = false }: { mont
             <div hidden={page !== 'transactions'}><Transactions active={page === 'transactions'} /></div>
             <div hidden={page !== 'recurring'}><Recurring data={summary ?? data.summary} /></div>
             <div hidden={page !== 'budget'}><Budget initial={data.budget} /></div>
+            <div hidden={page !== 'goals'}><Goals /></div>
+            <div hidden={page !== 'wishlist'}><Wishlist /></div>
           </>
         )}
       </main>
